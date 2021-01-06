@@ -1187,13 +1187,14 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
   // All of the remaining stack allocations are for locals.
   AFI->setLocalStackSize(NumBytes - PrologueSaveSize);
   bool CombineSPBump = shouldCombineCSRLocalStackBump(MF, NumBytes);
+  bool HomPrologEpilog = homogeneousPrologEpilog(MF);
   if (CombineSPBump) {
     assert(!SVEStackSize && "Cannot combine SP bump with SVE");
     emitFrameOffset(MBB, MBBI, DL, AArch64::SP, AArch64::SP,
                     StackOffset::getFixed(-NumBytes), TII,
                     MachineInstr::FrameSetup, false, NeedsWinCFI, &HasWinCFI);
     NumBytes = 0;
-  } else if (homogeneousPrologEpilog(MF)) {
+  } else if (HomPrologEpilog) {
     // Stack has been already adjusted.
     NumBytes -= PrologueSaveSize;
   } else if (PrologueSaveSize != 0) {
@@ -1223,13 +1224,20 @@ void AArch64FrameLowering::emitPrologue(MachineFunction &MF,
     if (CombineSPBump)
       FPOffset += AFI->getLocalStackSize();
 
-    // Issue    sub fp, sp, FPOffset or
-    //          mov fp,sp          when FPOffset is zero.
-    // Note: All stores of callee-saved registers are marked as "FrameSetup".
-    // This code marks the instruction(s) that set the FP also.
-    emitFrameOffset(MBB, MBBI, DL, AArch64::FP, AArch64::SP,
-                    StackOffset::getFixed(FPOffset), TII,
-                    MachineInstr::FrameSetup, false, NeedsWinCFI, &HasWinCFI);
+    if (HomPrologEpilog) {
+      auto Prolog = MBBI;
+      --Prolog;
+      assert(Prolog->getOpcode() == HOM_Prolog);
+      Prolog->addOperand(MachineOperand::CreateImm(FPOffset));
+    } else {
+      // Issue    sub fp, sp, FPOffset or
+      //          mov fp,sp          when FPOffset is zero.
+      // Note: All stores of callee-saved registers are marked as "FrameSetup".
+      // This code marks the instruction(s) that set the FP also.
+      emitFrameOffset(MBB, MBBI, DL, AArch64::FP, AArch64::SP,
+                      StackOffset::getFixed(FPOffset), TII,
+                      MachineInstr::FrameSetup, false, NeedsWinCFI, &HasWinCFI);
+    }
   }
 
   if (windowsRequiresStackProbe(MF, NumBytes)) {
@@ -1667,9 +1675,8 @@ void AArch64FrameLowering::emitEpilogue(MachineFunction &MF,
     }
 
     // Adjust local stack
-    uint64_t LocalStackSize = AFI->getLocalStackSize();
     emitFrameOffset(MBB, LastPopI, DL, AArch64::SP, AArch64::SP,
-                    {(int64_t)LocalStackSize, MVT::i8}, TII,
+                    StackOffset::getFixed(-AFI->getLocalStackSize()), TII,
                     MachineInstr::FrameDestroy, false, NeedsWinCFI);
 
     // SP has been already adjusted while restoring callee save regs.
@@ -2400,8 +2407,8 @@ bool AArch64FrameLowering::spillCalleeSavedRegisters(
                    .setMIFlag(MachineInstr::FrameSetup);
 
     for (auto &RPI : RegPairs) {
-      MIB.addReg(RPI.Reg1, RegState::Implicit);
-      MIB.addReg(RPI.Reg2, RegState::Implicit);
+      MIB.addReg(RPI.Reg1);
+      MIB.addReg(RPI.Reg2);
 
       // Update register live in.
       if (!MRI.isReserved(RPI.Reg1))
@@ -2610,8 +2617,8 @@ bool AArch64FrameLowering::restoreCalleeSavedRegisters(
     auto MIB = BuildMI(MBB, MI, DL, TII.get(AArch64::HOM_Epilog))
                    .setMIFlag(MachineInstr::FrameDestroy);
     for (auto &RPI : RegPairs) {
-      MIB.addReg(RPI.Reg1, RegState::Implicit | RegState::Define);
-      MIB.addReg(RPI.Reg2, RegState::Implicit | RegState::Define);
+      MIB.addReg(RPI.Reg1, RegState::Define);
+      MIB.addReg(RPI.Reg2, RegState::Define);
     }
     return true;
   } else

@@ -60,13 +60,13 @@ private:
   /// Lower a HOM_Prolog pseudo instruction into a helper call
   /// or a sequence of homogeneous stores.
   /// When a a fp setup follows, it can be optimized.
-  bool lowerHOM_Prolog(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
-                       MachineBasicBlock::iterator &NextMBBI);
+  bool lowerProlog(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+                   MachineBasicBlock::iterator &NextMBBI);
   /// Lower a HOM_Epilog pseudo instruction into a helper call
   /// or a sequence of homogeneous loads.
   /// When a return follow, it can be optimized.
-  bool lowerHOM_Epilog(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
-                       MachineBasicBlock::iterator &NextMBBI);
+  bool lowerEpilog(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+                   MachineBasicBlock::iterator &NextMBBI);
 };
 
 class AArch64LowerHomogeneousPrologEpilog : public ModulePass {
@@ -212,12 +212,6 @@ static void emitStore(MachineFunction &MF, MachineBasicBlock &MBB,
       .addReg(Reg1)
       .addReg(AArch64::SP)
       .addImm(Offset)
-      .addMemOperand(
-          MF.getMachineMemOperand(MachinePointerInfo::getUnknownStack(MF),
-                                  MachineMemOperand::MOStore, 8, Align(8)))
-      .addMemOperand(
-          MF.getMachineMemOperand(MachinePointerInfo::getUnknownStack(MF),
-                                  MachineMemOperand::MOStore, 8, Align(8)))
       .setMIFlag(MachineInstr::FrameSetup);
 }
 
@@ -241,12 +235,6 @@ static void emitLoad(MachineFunction &MF, MachineBasicBlock &MBB,
       .addReg(Reg1)
       .addReg(AArch64::SP)
       .addImm(Offset)
-      .addMemOperand(
-          MF.getMachineMemOperand(MachinePointerInfo::getUnknownStack(MF),
-                                  MachineMemOperand::MOLoad, 8, Align(8)))
-      .addMemOperand(
-          MF.getMachineMemOperand(MachinePointerInfo::getUnknownStack(MF),
-                                  MachineMemOperand::MOLoad, 8, Align(8)))
       .setMIFlag(MachineInstr::FrameDestroy);
 }
 
@@ -268,7 +256,7 @@ static void emitLoad(MachineFunction &MF, MachineBasicBlock &MBB,
 ///    ldp x29, x30, [sp, #32]
 ///    ldp x20, x19, [sp, #16]
 ///    ldp x22, x21, [sp], #48
-///    br x16
+///    ret x16
 ///
 /// 4) _OUTLINED_FUNCTION_EPILOG_TAIL_x30x29x19x20x21x22:
 ///    ldp x29, x30, [sp, #32]
@@ -300,15 +288,15 @@ static Function *getOrCreateFrameHelper(Module *M, MachineModuleInfo *MMI,
   case FrameHelperType::Prolog:
   case FrameHelperType::PrologFrame: {
     // Compute the remaining SP adjust beyond FP/LR.
-    auto LRIter = std::find(Regs.begin(), Regs.end(), AArch64::LR);
-    assert(LRIter != Regs.end());
-    int SPAdjust = Size - std::distance(Regs.begin(), LRIter) - 2;
-    // Save the the first CSR with pre-increment of SP.
-    if (SPAdjust) {
-      // FP/LR is not the bottom-most save.
+    auto LRIdx = std::distance(
+        Regs.begin(), std::find(Regs.begin(), Regs.end(), AArch64::LR));
+
+    // If the register stored to the lowest address is not LR, we must subtract
+    // more from SP here.
+    if (LRIdx != Size - 2) {
       assert(Regs[Size - 2] != AArch64::LR);
       emitStore(MF, MBB, MBB.end(), TII, Regs[Size - 2], Regs[Size - 1],
-                -SPAdjust, true);
+                LRIdx - Size + 2, true);
     }
 
     // Store CSRs in the reverse order.
@@ -328,7 +316,7 @@ static Function *getOrCreateFrameHelper(Module *M, MachineModuleInfo *MMI,
           .setMIFlag(MachineInstr::FrameSetup);
 
     BuildMI(MBB, MBB.end(), DebugLoc(), TII.get(AArch64::RET))
-        .addReg(AArch64::LR, RegState::Undef);
+        .addReg(AArch64::LR);
     break;
   }
   case FrameHelperType::Epilog:
@@ -348,45 +336,12 @@ static Function *getOrCreateFrameHelper(Module *M, MachineModuleInfo *MMI,
     emitLoad(MF, MBB, MBB.end(), TII, Regs[Size - 2], Regs[Size - 1], Size,
              true);
 
-    if (Type == FrameHelperType::Epilog)
-      // Branch on X16 not to trash LR.
-      BuildMI(MBB, MBB.end(), DebugLoc(), TII.get(AArch64::BR))
-          .addUse(AArch64::X16);
-    else
-      BuildMI(MBB, MBB.end(), DebugLoc(), TII.get(AArch64::RET))
-          .addReg(AArch64::LR, RegState::Undef);
+    BuildMI(MBB, MBB.end(), DebugLoc(), TII.get(AArch64::RET))
+        .addReg(Type == FrameHelperType::Epilog ? AArch64::X16 : AArch64::LR);
     break;
   }
 
   return M->getFunction(Name);
-}
-
-/// Get a valid non-negative adjustment to set fp from sp.
-/// @param MBBI instruciton setting fp from sp.
-/// @return a valid non-negative adjustment. Or -1 for any other case.
-int getFpAdjustmentFromSp(MachineBasicBlock::iterator &MBBI) {
-  MachineInstr &MI = *MBBI;
-  if (!MI.getFlag(MachineInstr::FrameSetup))
-    return -1;
-  unsigned Opcode = MI.getOpcode();
-  if (Opcode != AArch64::ADDXri && Opcode != AArch64::SUBXri)
-    return -1;
-  if (!MI.getOperand(0).isReg())
-    return -1;
-  if (MI.getOperand(0).getReg() != AArch64::FP)
-    return -1;
-  if (!MI.getOperand(1).isReg())
-    return -1;
-  if (MI.getOperand(1).getReg() != AArch64::SP)
-    return -1;
-
-  int Imm = MI.getOperand(2).getImm();
-  if (Opcode == AArch64::ADDXri && Imm >= 0)
-    return Imm;
-  else if (Opcode == AArch64::SUBXri && Imm <= 0)
-    return -Imm;
-
-  return -1;
 }
 
 /// This function checks if a frame helper should be used for
@@ -400,10 +355,10 @@ static bool shouldUseFrameHelper(MachineBasicBlock &MBB,
                                  MachineBasicBlock::iterator &NextMBBI,
                                  SmallVectorImpl<unsigned> &Regs,
                                  FrameHelperType Type) {
-  int RegCount = (int)Regs.size();
+  auto RegCount = Regs.size();
   assert(RegCount > 0 && (RegCount % 2 == 0));
   // # of instructions that will be outlined.
-  int InstCount = RegCount >> 1;
+  int InstCount = RegCount / 2;
 
   // Do not use a helper call when not saving LR.
   if (std::find(Regs.begin(), Regs.end(), AArch64::LR) == Regs.end())
@@ -415,13 +370,6 @@ static bool shouldUseFrameHelper(MachineBasicBlock &MBB,
     InstCount--;
     break;
   case FrameHelperType::PrologFrame: {
-    // Prolog helper cannot save FP/LR.
-    // Check if the following instruction is beneficial to be included.
-    if (NextMBBI == MBB.end())
-      return false;
-    int FpAdjustment = getFpAdjustmentFromSp(NextMBBI);
-    if (FpAdjustment == -1)
-      return false;
     // Effecitvely no change in InstCount since FpAdjusment is included.
     break;
   }
@@ -468,7 +416,7 @@ static bool shouldUseFrameHelper(MachineBasicBlock &MBB,
 ///    ldp x29, x30, [sp, #32]
 ///    ldp x20, x19, [sp, #16]
 ///    ldp x22, x21, [sp], #48
-bool AArch64LowerHomogeneousPE::lowerHOM_Epilog(
+bool AArch64LowerHomogeneousPE::lowerEpilog(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
     MachineBasicBlock::iterator &NextMBBI) {
   auto &MF = *MBB.getParent();
@@ -476,7 +424,7 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Epilog(
 
   DebugLoc DL = MI.getDebugLoc();
   SmallVector<unsigned, 8> Regs;
-  for (auto &MO : MI.implicit_operands())
+  for (auto &MO : MI.operands())
     if (MO.isReg())
       Regs.push_back(MO.getReg());
   int Size = (int)Regs.size();
@@ -489,7 +437,7 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Epilog(
   auto Return = NextMBBI;
   if (shouldUseFrameHelper(MBB, NextMBBI, Regs, FrameHelperType::EpilogTail)) {
     // When MBB ends with a return, emit a tail-call to the epilog helper
-    auto EpilogTailHelper =
+    auto *EpilogTailHelper =
         getOrCreateFrameHelper(M, MMI, Regs, FrameHelperType::EpilogTail);
     BuildMI(MBB, MBBI, DL, TII->get(AArch64::TCRETURNdi))
         .addGlobalAddress(EpilogTailHelper)
@@ -502,7 +450,7 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Epilog(
   } else if (shouldUseFrameHelper(MBB, NextMBBI, Regs,
                                   FrameHelperType::Epilog)) {
     // The default epilog helper case.
-    auto EpilogHelper =
+    auto *EpilogHelper =
         getOrCreateFrameHelper(M, MMI, Regs, FrameHelperType::Epilog);
     BuildMI(MBB, MBBI, DL, TII->get(AArch64::BL))
         .addGlobalAddress(EpilogHelper)
@@ -525,12 +473,10 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Epilog(
 /// not using a helper call.
 ///
 /// 1. With a helper including frame-setup
-///    HOM_Prolog x30, x29, x19, x20, x21, x22      ; MBBI
-///    add x29, x30, #32                            ; NextMBBI
+///    HOM_Prolog x30, x29, x19, x20, x21, x22, 32
 ///    =>
 ///    stp x29, x30, [sp, #-16]!
 ///    bl _OUTLINED_FUNCTION_PROLOG_FRAME32_x30x29x19x20x21x22
-///    ...                                          ; NextMBBI
 ///
 /// 2. With a helper
 ///    HOM_Prolog x30, x29, x19, x20, x21, x22
@@ -544,7 +490,7 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Epilog(
 ///    stp	x22, x21, [sp, #-48]!
 ///    stp	x20, x19, [sp, #16]
 ///    stp	x29, x30, [sp, #32]
-bool AArch64LowerHomogeneousPE::lowerHOM_Prolog(
+bool AArch64LowerHomogeneousPE::lowerProlog(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
     MachineBasicBlock::iterator &NextMBBI) {
   auto &MF = *MBB.getParent();
@@ -553,11 +499,14 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Prolog(
   DebugLoc DL = MI.getDebugLoc();
   SmallVector<unsigned, 8> Regs;
   int LRIdx = 0;
-  for (auto &MO : MI.implicit_operands()) {
+  Optional<int> FpOffset;
+  for (auto &MO : MI.operands()) {
     if (MO.isReg()) {
       if (MO.getReg() == AArch64::LR)
         LRIdx = Regs.size();
       Regs.push_back(MO.getReg());
+    } else if (MO.isImm()) {
+      FpOffset = MO.getImm();
     }
   }
   int Size = (int)Regs.size();
@@ -567,24 +516,20 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Prolog(
   assert(Size % 2 == 0);
   assert(MI.getOpcode() == AArch64::HOM_Prolog);
 
-  auto FpAdjustment = NextMBBI;
-  if (shouldUseFrameHelper(MBB, NextMBBI, Regs, FrameHelperType::PrologFrame)) {
+  if (FpOffset &&
+      shouldUseFrameHelper(MBB, NextMBBI, Regs, FrameHelperType::PrologFrame)) {
     // FP/LR is stored at the top of stack before the prolog helper call.
     emitStore(MF, MBB, MBBI, *TII, AArch64::LR, AArch64::FP, -LRIdx - 2, true);
-    auto FpOffset = getFpAdjustmentFromSp(NextMBBI);
     auto PrologFrameHelper = getOrCreateFrameHelper(
-        M, MMI, Regs, FrameHelperType::PrologFrame, FpOffset);
+        M, MMI, Regs, FrameHelperType::PrologFrame, *FpOffset);
     BuildMI(MBB, MBBI, DL, TII->get(AArch64::BL))
         .addGlobalAddress(PrologFrameHelper)
         .setMIFlag(MachineInstr::FrameSetup)
         .copyImplicitOps(MI)
-        .copyImplicitOps(*FpAdjustment)
         .addReg(AArch64::FP, RegState::Implicit | RegState::Define)
         .addReg(AArch64::SP, RegState::Implicit);
-    NextMBBI = std::next(FpAdjustment);
-    FpAdjustment->removeFromParent();
-  } else if (shouldUseFrameHelper(MBB, NextMBBI, Regs,
-                                  FrameHelperType::Prolog)) {
+  } else if (!FpOffset && shouldUseFrameHelper(MBB, NextMBBI, Regs,
+                                               FrameHelperType::Prolog)) {
     // FP/LR is stored at the top of stack before the prolog helper call.
     emitStore(MF, MBB, MBBI, *TII, AArch64::LR, AArch64::FP, -LRIdx - 2, true);
     auto PrologHelper =
@@ -598,6 +543,14 @@ bool AArch64LowerHomogeneousPE::lowerHOM_Prolog(
     emitStore(MF, MBB, MBBI, *TII, Regs[Size - 2], Regs[Size - 1], -Size, true);
     for (int I = Size - 3; I >= 0; I -= 2)
       emitStore(MF, MBB, MBBI, *TII, Regs[I - 1], Regs[I], Size - I - 1, false);
+    if (FpOffset) {
+      BuildMI(MBB, MBBI, DL, TII->get(AArch64::ADDXri))
+          .addDef(AArch64::FP)
+          .addUse(AArch64::SP)
+          .addImm(*FpOffset)
+          .addImm(0)
+          .setMIFlag(MachineInstr::FrameSetup);
+    }
   }
 
   MBBI->removeFromParent();
@@ -618,9 +571,9 @@ bool AArch64LowerHomogeneousPE::runOnMI(MachineBasicBlock &MBB,
   default:
     break;
   case AArch64::HOM_Prolog:
-    return lowerHOM_Prolog(MBB, MBBI, NextMBBI);
+    return lowerProlog(MBB, MBBI, NextMBBI);
   case AArch64::HOM_Epilog:
-    return lowerHOM_Epilog(MBB, MBBI, NextMBBI);
+    return lowerEpilog(MBB, MBBI, NextMBBI);
   }
   return false;
 }

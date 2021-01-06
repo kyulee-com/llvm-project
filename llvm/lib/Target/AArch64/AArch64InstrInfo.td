@@ -3884,7 +3884,9 @@ let isTerminator = 1, hasSideEffects = 1, isBarrier = 1, hasCtrlDep = 1,
 
 // Pseudo instructions for homogeneous prolog/epilog
 let isPseudo = 1 in {
+  // Save CSRs in order, {FPOffset}
   def HOM_Prolog : Pseudo<(outs), (ins), []>, Sched<[]>;
+  // Restore CSRs in order
   def HOM_Epilog : Pseudo<(outs), (ins), []>, Sched<[]>;
 }
 //===----------------------------------------------------------------------===//
