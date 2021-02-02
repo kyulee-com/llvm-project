@@ -231,8 +231,8 @@ static void emitLoad(MachineFunction &MF, MachineBasicBlock &MBB,
   MachineInstrBuilder MIB = BuildMI(MBB, Pos, DebugLoc(), TII.get(Opc));
   if (IsPostDec)
     MIB.addDef(AArch64::SP);
-  MIB.addReg(Reg2)
-      .addReg(Reg1)
+  MIB.addReg(Reg2, getDefRegState(true))
+      .addReg(Reg1, getDefRegState(true))
       .addReg(AArch64::SP)
       .addImm(Offset)
       .setMIFlag(MachineInstr::FrameDestroy);
