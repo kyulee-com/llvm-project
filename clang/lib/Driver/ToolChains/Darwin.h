@@ -202,6 +202,14 @@ public:
     // There aren't any profiling libs for embedded targets currently.
   }
 
+  /// Add any profiling runtime libraries that are needed. This is essentially a
+  /// MachO specific version of addMachineProfileRT in Tools.cpp.
+  void
+  addMachineProfileRTLibs(const llvm::opt::ArgList &Args,
+                          llvm::opt::ArgStringList &CmdArgs) const override {
+    // There aren't any profiling libs for embedded targets currently.
+  }
+
   /// }
   /// @name ToolChain Implementation
   /// {
@@ -328,6 +336,10 @@ public:
 
   void addProfileRTLibs(const llvm::opt::ArgList &Args,
                         llvm::opt::ArgStringList &CmdArgs) const override;
+
+  void
+  addMachineProfileRTLibs(const llvm::opt::ArgList &Args,
+                          llvm::opt::ArgStringList &CmdArgs) const override;
 
 protected:
   /// }
