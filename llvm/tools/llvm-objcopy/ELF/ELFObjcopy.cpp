@@ -55,7 +55,8 @@ using SectionPred = std::function<bool(const SectionBase &Sec)>;
 
 static bool isDebugSection(const SectionBase &Sec) {
   return StringRef(Sec.Name).startswith(".debug") ||
-         StringRef(Sec.Name).startswith(".zdebug") || Sec.Name == ".gdb_index";
+         StringRef(Sec.Name).startswith(".zdebug") ||
+         Sec.Name == ".gdb_index" || Sec.Name == "__llvm_mipmap";
 }
 
 static bool isDWOSection(const SectionBase &Sec) {
