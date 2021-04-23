@@ -14,6 +14,7 @@
 #include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Driver/Options.h"
 #include "clang/Driver/SanitizerArgs.h"
+#include "llvm/MIP/MIP.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/ProfileData/InstrProf.h"
 #include "llvm/Support/FileSystem.h"
@@ -128,6 +129,7 @@ void fuchsia::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   bool NeedsXRayDeps = addXRayRuntime(ToolChain, Args, CmdArgs);
   AddLinkerInputs(ToolChain, Inputs, Args, CmdArgs, JA);
   ToolChain.addProfileRTLibs(Args, CmdArgs);
+  ToolChain.addMachineProfileRTLibs(Args, CmdArgs);
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
     if (Args.hasArg(options::OPT_static))
@@ -445,5 +447,16 @@ void Fuchsia::addProfileRTLibs(const llvm::opt::ArgList &Args,
   if (needsProfileRT(Args))
     CmdArgs.push_back(Args.MakeArgString(
         Twine("-u", llvm::getInstrProfRuntimeHookVarName())));
+  ToolChain::addProfileRTLibs(Args, CmdArgs);
+}
+
+void Fuchsia::addMachineProfileRTLibs(const llvm::opt::ArgList &Args,
+                                      llvm::opt::ArgStringList &CmdArgs) const {
+  // Add linker option -u__llvm_mip_runtime to cause runtime
+  // initialization module to be linked in.
+  if (needsMachineProfileRT(Args) &&
+      !Args.hasArg(options::OPT_fno_machine_profile_dump)) {
+    CmdArgs.push_back(Args.MakeArgString("-u" MIP_RUNTIME_SYMBOL_NAME));
+  }
   ToolChain::addProfileRTLibs(Args, CmdArgs);
 }
