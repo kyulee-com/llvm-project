@@ -1,0 +1,39 @@
+; RUN: xxd -r %p/Inputs/function-coverage.mipmap.hex > %t.mipmap
+; RUN: xxd -r %p/Inputs/function-coverage.mipraw.hex > %t.mipraw
+; RUN: llvm-mipdata create -p %t.mip %t.mipmap
+; RUN: llvm-mipdata merge -p %t.mip %t.mipraw
+; RUN: llvm-mipdata mip2yaml -p %t.mip | FileCheck %s --match-full-lines
+
+; CHECK: Header:
+; CHECK:   File Type:       .mip
+; CHECK:   Profile Type:    [ Function Coverage ]
+; CHECK:   Module Hash:     0xDEADBEEF
+; CHECK: Profiles:
+; CHECK:   - Function Name:   foo
+; CHECK:     Function Signature: 0x5CF8C24CDB18BDAC
+; CHECK:     Raw Profile Data Address: 0x18
+; CHECK:     Encoded Function Address: 0x100
+; CHECK:     Function Size:   0x10
+; CHECK:     Control Flow Graph Signature: 0xE7715
+; CHECK:     Raw Profile Count: 1
+; CHECK:     Function Call Count: 1
+; CHECK:     Function Order Sum: 0
+; CHECK:     Basic Block Profiles:
+; CHECK:       - Offset:          0x0
+; CHECK:         Covered:         true
+; CHECK:       - Offset:          0x4
+; CHECK:         Covered:         false
+; CHECK:     Call Edges:      []
+; CHECK:   - Function Name:   main
+; CHECK:     Function Signature: 0xDB956436E78DD5FA
+; CHECK:     Raw Profile Data Address: 0x19
+; CHECK:     Encoded Function Address: 0x110
+; CHECK:     Function Size:   0x30
+; CHECK:     Control Flow Graph Signature: 0x1111
+; CHECK:     Raw Profile Count: 0
+; CHECK:     Function Call Count: 0
+; CHECK:     Function Order Sum: 0
+; CHECK:     Basic Block Profiles:
+; CHECK:       - Offset:          0x0
+; CHECK:         Covered:         false
+; CHECK:     Call Edges:      []
