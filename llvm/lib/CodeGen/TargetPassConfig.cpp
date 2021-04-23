@@ -23,6 +23,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Analysis/TypeBasedAliasAnalysis.h"
 #include "llvm/CodeGen/CSEConfigBase.h"
+#include "llvm/CodeGen/MIRInstrumentationPass.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachinePassRegistry.h"
 #include "llvm/CodeGen/Passes.h"
@@ -1225,6 +1226,10 @@ void TargetPassConfig::addMachinePasses() {
   // Insert pseudo probe annotation for callsite profiling
   if (TM->Options.PseudoProbeForProfiling)
     addPass(createPseudoProbeInserter());
+
+  // Inject machine instrumentation code into machine functions.
+  if (MIRInstrumentation::EnableMachineInstrumentation)
+    addPass(&MIRInstrumentationID);
 
   AddingMachinePasses = false;
 }
