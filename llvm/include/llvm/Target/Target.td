@@ -1026,6 +1026,12 @@ def MIP_FUNCTION_COVERAGE_INSTRUMENTATION : StandardPseudoInstruction {
   let AsmString = "";
   let hasSideEffects = 1;
 }
+def MIP_INSTRUMENTATION : StandardPseudoInstruction {
+  let OutOperandList = (outs);
+  let InOperandList = (ins unknown:$reg, unknown:$helper);
+  let AsmString = "";
+  let hasSideEffects = 1;
+}
 def MIP_BASIC_BLOCK_COVERAGE_INSTRUMENTATION : StandardPseudoInstruction {
   let OutOperandList = (outs);
   let InOperandList = (ins unknown:$reg, i32imm:$n);
