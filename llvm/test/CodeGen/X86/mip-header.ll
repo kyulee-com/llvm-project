@@ -1,5 +1,5 @@
-; RUN: llc < %s -enable-machine-instrumentation -enable-machine-function-coverage -mtriple=x86_64-linux | FileCheck %s --check-prefix ELF
-; RUN: llc < %s -enable-machine-instrumentation -enable-machine-function-coverage -mtriple=x86_64-apple-macosx | FileCheck %s --check-prefix MACHO
+; RUN: llc < %s -enable-machine-instrumentation -enable-machine-call-graph -mtriple=x86_64-linux | FileCheck %s --check-prefix ELF
+; RUN: llc < %s -enable-machine-instrumentation -enable-machine-call-graph -mtriple=x86_64-apple-macosx | FileCheck %s --check-prefix MACHO
 
 define i32 @_Z3fooii(i32 %a, i32 %b) #0 {
   ret i32 0
@@ -12,7 +12,7 @@ define i32 @_Z3fooii(i32 %a, i32 %b) #0 {
 ; ELF-NEXT:    .long    0x50494dfb                      # Magic
 ; ELF-NEXT:    .short   8                               # Version
 ; ELF-NEXT:    .short   0x1                             # File Type
-; ELF-NEXT:    .long    0x1                             # Profile Type
+; ELF-NEXT:    .long    0xc                             # Profile Type
 ; ELF-NEXT:    .long    [[MODULE_HASH:.*]]              # Module Hash
 ; ELF-NEXT:    .zero    4
 ; ELF-NEXT:    .long    0x18                            # Offset To Data
@@ -24,7 +24,7 @@ define i32 @_Z3fooii(i32 %a, i32 %b) #0 {
 ; ELF-NEXT:    .long    0x50494dfb                      # Magic
 ; ELF-NEXT:    .short   8                               # Version
 ; ELF-NEXT:    .short   0x2                             # File Type
-; ELF-NEXT:    .long    0x1                             # Profile Type
+; ELF-NEXT:    .long    0xc                             # Profile Type
 ; ELF-NEXT:    .long    [[MODULE_HASH]]                 # Module Hash
 ; ELF-NEXT:    .zero    4
 ; ELF-NEXT:    .long    0x18                            # Offset To Data
@@ -38,7 +38,7 @@ define i32 @_Z3fooii(i32 %a, i32 %b) #0 {
 ; MACHO:       .long   0x50494dfb              ## Magic
 ; MACHO-NEXT:  .short  8                       ## Version
 ; MACHO-NEXT:  .short  0x1                     ## File Type
-; MACHO-NEXT:  .long   0x1                     ## Profile Type
+; MACHO-NEXT:  .long   0xc                     ## Profile Type
 ; MACHO-NEXT:  .long   [[MODULE_HASH:.*]]      ## Module Hash
 ; MACHO-NEXT:  .space  4
 ; MACHO-NEXT:  .long   0x18                    ## Offset To Data
@@ -53,7 +53,7 @@ define i32 @_Z3fooii(i32 %a, i32 %b) #0 {
 ; MACHO:       .long   0x50494dfb              ## Magic
 ; MACHO-NEXT:  .short  8                       ## Version
 ; MACHO-NEXT:  .short  0x2                     ## File Type
-; MACHO-NEXT:  .long   0x1                     ## Profile Type
+; MACHO-NEXT:  .long   0xc                     ## Profile Type
 ; MACHO-NEXT:  .long   [[MODULE_HASH]]         ## Module Hash
 ; MACHO-NEXT:  .space  4
 ; MACHO-NEXT:  .long   0x18                    ## Offset To Data
