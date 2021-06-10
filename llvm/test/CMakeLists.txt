@@ -98,6 +98,7 @@ set(LLVM_TEST_DEPENDS
           llvm-nm
           llvm-objcopy
           llvm-objdump
+          llvm-mipdata
           llvm-opt-fuzzer
           llvm-opt-report
           llvm-otool

@@ -1,0 +1,2 @@
+0000000: FB4D 4950 0700 0100 0100 0000 EFBE ADDE    // Magic, Version=7, FileType=Raw, ProfileType=FunctionCoverage, ModuleHash=0xdeadbeef
+0000010: 0000 0000 1800 0000 00FF                   // Reserved=0, OffsetToData=0x18, main=Covered, foo=NotCovered

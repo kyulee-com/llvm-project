@@ -146,6 +146,11 @@ add_llvm_component_library(LLVMCodeGen
   MIRVRegNamerUtils.cpp
   MIRNamerPass.cpp
   MIRCanonicalizerPass.cpp
+  MIRInstrumentationPass.cpp
+  MIPReader.cpp
+  MIPSectionEmitter.cpp
+  MIPWriter.cpp
+  MIP.cpp
   RegisterUsageInfo.cpp
   RegUsageInfoCollector.cpp
   RegUsageInfoPropagate.cpp

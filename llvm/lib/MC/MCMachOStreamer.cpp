@@ -30,6 +30,7 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCSymbolMachO.h"
 #include "llvm/MC/MCValue.h"
+#include "llvm/MIP/MIP.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/TargetRegistry.h"
@@ -141,6 +142,10 @@ static bool canGoAfterDWARF(const MCSectionMachO &MSec) {
 
   if (SegName == "__DATA" && (SecName == "__nl_symbol_ptr" ||
                               SecName == "__thread_ptr"))
+    return true;
+
+  if (SegName == "__DATA" &&
+      (SecName == MIP_MAP_SECTION_NAME || SecName == MIP_RAW_SECTION_NAME))
     return true;
 
   return false;

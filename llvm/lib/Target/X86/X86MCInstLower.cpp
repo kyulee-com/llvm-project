@@ -1385,6 +1385,74 @@ void X86AsmPrinter::LowerSTACKMAP(const MachineInstr &MI) {
   SMShadowTracker.reset(NumShadowBytes);
 }
 
+void X86AsmPrinter::LowerMIP_FUNCTION_INSTRUMENTATION_MARKER(
+    const MachineInstr &MI) {
+  MIPEmitter.runOnFunctionInstrumentationMarker(MI);
+}
+
+void X86AsmPrinter::LowerMIP_FUNCTION_COVERAGE_INSTRUMENTATION(
+    const MachineInstr &MI) {
+  auto *RawProfileSymbol = MIPEmitter.getRawProfileSymbol();
+
+  OutStreamer->AddComment("MIP: Function Coverage");
+  // movb   $0, <RawProfileSymbol>(%rsp)
+  EmitAndCountInstruction(
+      MCInstBuilder(X86::MOV8mi)
+          .addReg(X86::RIP) // BaseReg
+          .addImm(1)        // ScaleAmt
+          .addReg(0)        // IndexReg
+          .addExpr(MCSymbolRefExpr::create(RawProfileSymbol, OutContext))
+          .addReg(0) // Segment
+          .addImm(0) // Immediate
+  );
+}
+
+void X86AsmPrinter::LowerMIP_INSTRUMENTATION(const MachineInstr &MI) {
+  auto *RawProfileSymbol = MIPEmitter.getRawProfileSymbol();
+  const char *HelperSymbol = MI.getOperand(1).getSymbolName();
+
+  OutStreamer->AddComment("MIP Instrumentation");
+  // leaq   <RawProfileSymbol>(%rip), %rax
+  EmitAndCountInstruction(
+      MCInstBuilder(X86::LEA64r)
+          .addReg(X86::RAX)
+          .addReg(X86::RIP)
+          .addImm(1)
+          .addReg(X86::NoRegister)
+          .addExpr(MCSymbolRefExpr::create(RawProfileSymbol, OutContext))
+          .addReg(X86::NoRegister));
+
+  // callq  <HelperSymbol>
+  EmitAndCountInstruction(
+      MCInstBuilder(X86::CALL64pcrel32)
+          .addExpr(MCSymbolRefExpr::create(
+              HelperSymbol, MCSymbolRefExpr::VK_None, OutContext)));
+}
+
+void X86AsmPrinter::LowerMIP_BASIC_BLOCK_COVERAGE_INSTRUMENTATION(
+    const MachineInstr &MI) {
+  MIPEmitter.runOnBasicBlockInstrumentationMarker(MI);
+
+  auto *RawProfileSymbol = MIPEmitter.getRawProfileSymbol();
+
+  auto BlockID = MI.getOperand(1).getImm();
+  auto Offset = MIPEmitter.getOffsetToRawBlockProfileSymbol(BlockID);
+
+  OutStreamer->AddComment("MIP: Block Coverage");
+  // movb   $0, <RawProfileSymbol>+<Offset>(%rsp)
+  EmitAndCountInstruction(
+      MCInstBuilder(X86::MOV8mi)
+          .addReg(X86::RIP) // BaseReg
+          .addImm(1)        // ScaleAmt
+          .addReg(0)        // IndexReg
+          .addExpr(MCBinaryExpr::createAdd(
+              MCSymbolRefExpr::create(RawProfileSymbol, OutContext),
+              MCConstantExpr::create(Offset, OutContext), OutContext))
+          .addReg(0) // Segment
+          .addImm(0) // Immediate
+  );
+}
+
 // Lower a patchpoint of the form:
 // [<def>], <id>, <numBytes>, <target>, <numArgs>, <cc>, ...
 void X86AsmPrinter::LowerPATCHPOINT(const MachineInstr &MI,
@@ -2540,6 +2608,18 @@ void X86AsmPrinter::emitInstruction(const MachineInstr *MI) {
 
   case TargetOpcode::STACKMAP:
     return LowerSTACKMAP(*MI);
+
+  case TargetOpcode::MIP_FUNCTION_INSTRUMENTATION_MARKER:
+    return LowerMIP_FUNCTION_INSTRUMENTATION_MARKER(*MI);
+
+  case TargetOpcode::MIP_FUNCTION_COVERAGE_INSTRUMENTATION:
+    return LowerMIP_FUNCTION_COVERAGE_INSTRUMENTATION(*MI);
+
+  case TargetOpcode::MIP_INSTRUMENTATION:
+    return LowerMIP_INSTRUMENTATION(*MI);
+
+  case TargetOpcode::MIP_BASIC_BLOCK_COVERAGE_INSTRUMENTATION:
+    return LowerMIP_BASIC_BLOCK_COVERAGE_INSTRUMENTATION(*MI);
 
   case TargetOpcode::PATCHPOINT:
     return LowerPATCHPOINT(*MI, MCInstLowering);
