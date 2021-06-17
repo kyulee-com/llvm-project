@@ -195,7 +195,8 @@ Align AsmPrinter::getGVAlignment(const GlobalObject *GV, const DataLayout &DL,
 
 AsmPrinter::AsmPrinter(TargetMachine &tm, std::unique_ptr<MCStreamer> Streamer)
     : MachineFunctionPass(ID), TM(tm), MAI(tm.getMCAsmInfo()),
-      OutContext(Streamer->getContext()), OutStreamer(std::move(Streamer)) {
+      OutContext(Streamer->getContext()), OutStreamer(std::move(Streamer)),
+      MIPEmitter(*this) {
   VerboseAsm = OutStreamer->isVerboseAsm();
 }
 
@@ -1464,6 +1465,8 @@ void AsmPrinter::emitFunctionBody() {
     OutStreamer->emitLabel(CurrentFnEnd);
   }
 
+  MIPEmitter.runOnMachineFunctionEnd(*MF);
+
   // If the target wants a .size directive for the size of the function, emit
   // it.
   if (MAI->hasDotTypeDotSizeDirective()) {
@@ -1925,6 +1928,9 @@ bool AsmPrinter::doFinalization(Module &M) {
   // after everything else has gone out.
   emitEndOfAsmFile(M);
 
+  MIPEmitter.serializeToMIPRawSection();
+  MIPEmitter.serializeToMIPMapSection();
+
   MMI = nullptr;
 
   OutStreamer->Finish();
@@ -1979,6 +1985,7 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   }
 
   ORE = &getAnalysis<MachineOptimizationRemarkEmitterPass>().getORE();
+  MIPEmitter.runOnMachineFunctionStart(MF);
 }
 
 namespace {
