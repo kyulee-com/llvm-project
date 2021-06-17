@@ -20,6 +20,7 @@
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCSectionWasm.h"
 #include "llvm/MC/MCSectionXCOFF.h"
+#include "llvm/MIP/MIP.h"
 
 using namespace llvm;
 
@@ -295,6 +296,13 @@ void MCObjectFileInfo::initMachOMCObjectFileInfo(const Triple &T) {
   FaultMapSection = Ctx->getMachOSection("__LLVM_FAULTMAPS", "__llvm_faultmaps",
                                          0, SectionKind::getMetadata());
 
+  MIPRawSection = Ctx->getMachOSection("__DATA", MIP_RAW_SECTION_NAME,
+                                       MachO::S_ATTR_NO_DEAD_STRIP, 0,
+                                       SectionKind::getMetadata());
+  MIPMapSection = Ctx->getMachOSection("__DATA", MIP_MAP_SECTION_NAME,
+                                       MachO::S_ATTR_NO_DEAD_STRIP, 0,
+                                       SectionKind::getMetadata());
+
   RemarksSection = Ctx->getMachOSection(
       "__LLVM", "__remarks", MachO::S_ATTR_DEBUG, SectionKind::getMetadata());
 
@@ -493,6 +501,19 @@ void MCObjectFileInfo::initELFMCObjectFileInfo(const Triple &T, bool Large) {
 
   FaultMapSection =
       Ctx->getELFSection(".llvm_faultmaps", ELF::SHT_PROGBITS, ELF::SHF_ALLOC);
+
+  MIPRawSection = Ctx->getELFSection(MIP_RAW_SECTION_NAME, ELF::SHT_PROGBITS,
+                                     ELF::SHF_WRITE | ELF::SHF_ALLOC);
+  MIPMapSection = Ctx->getELFSection(MIP_MAP_SECTION_NAME, ELF::SHT_NOTE,
+                                     ELF::SHF_WRITE | ELF::SHF_GNU_RETAIN);
+  MIPRawHeaderComdatSection =
+      Ctx->getELFSection(MIP_RAW_SECTION_NAME, ELF::SHT_PROGBITS,
+                         ELF::SHF_WRITE | ELF::SHF_ALLOC | ELF::SHF_GROUP, 0,
+                         "Header", /*IsComdat=*/true);
+  MIPMapHeaderComdatSection =
+      Ctx->getELFSection(MIP_MAP_SECTION_NAME, ELF::SHT_NOTE,
+                         ELF::SHF_WRITE | ELF::SHF_GROUP | ELF::SHF_GNU_RETAIN,
+                         0, "Header", /*IsComdat=*/true);
 
   EHFrameSection =
       Ctx->getELFSection(".eh_frame", EHSectionType, EHSectionFlags);

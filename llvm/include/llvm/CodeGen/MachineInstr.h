@@ -1320,6 +1320,7 @@ public:
     case TargetOpcode::LIFETIME_START:
     case TargetOpcode::LIFETIME_END:
     case TargetOpcode::PSEUDO_PROBE:
+    case TargetOpcode::MIP_FUNCTION_INSTRUMENTATION_MARKER:
       return true;
     }
   }
