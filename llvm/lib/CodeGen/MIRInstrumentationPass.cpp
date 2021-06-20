@@ -113,7 +113,8 @@ bool MIRInstrumentation::runOnMachineFunction(MachineFunction &MF) {
       .addImm(NonEntryBlockCount);
   ++NumInstrumented;
 
-  if (EnableMachineFunctionCoverage) {
+  //if (EnableMachineFunctionCoverage) {
+  if (true) {
     BuildMI(EntryBlock, MBBI, DL,
             TII.get(TargetOpcode::MIP_FUNCTION_COVERAGE_INSTRUMENTATION))
         .addReg(TII.getTemporaryMachineProfileRegister(EntryBlock));

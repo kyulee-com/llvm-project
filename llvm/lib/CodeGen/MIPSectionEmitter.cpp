@@ -61,7 +61,8 @@ void MIPSectionEmitter::runOnMachineFunctionStart(MachineFunction &MF) {
 
   for (auto &MBB : MF)
     MBB.setLabelMustBeEmitted();
-  CurrentFunctionEndSymbol = OutContext.createTempSymbol("mip_func_end");
+  //CurrentFunctionEndSymbol = OutContext.createTempSymbol("mip_func_end");
+  CurrentFunctionEndSymbol = OutContext.createLinkerPrivateTempSymbol();//OutContext.createTempSymbol("mip_func_end");
 }
 
 void MIPSectionEmitter::runOnMachineFunctionEnd(MachineFunction &MF) {
