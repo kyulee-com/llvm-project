@@ -185,7 +185,7 @@ std::error_code MIPMapReader::readData(std::unique_ptr<MemoryBuffer> &Buffer,
   const char *Data = DataStart + MIP->Header.OffsetToData;
 
   while (Data < Buffer->getBufferEnd()) {
-    const auto &Profile = readNextProfile(Data, DataStart, MIP->Header);
+    const auto &Profile = readNextProfile(Data, Data - DataStart, MIP->Header);
     MIP->Profiles.push_back(*Profile->get());
   }
 
@@ -193,12 +193,12 @@ std::error_code MIPMapReader::readData(std::unique_ptr<MemoryBuffer> &Buffer,
 }
 
 ErrorOr<std::unique_ptr<MFProfile>>
-MIPMapReader::readNextProfile(const char *&Data, const char *DataStart, const MIPHeader& Header) {
+MIPMapReader::readNextProfile(const char *&Data, size_t CurrOffset, const MIPHeader& Header) {
   uint16_t Version = Header.Version;
   std::unique_ptr<MFProfile> Profile(new MFProfile());
   // `reserved` in the header points to the raw section start relative to the map section start.
-  // Compute the raw section start relative to the current funciton profile.
-  auto RelativeRawSectionStart = Header.Reserved + (Data - DataStart);
+  // Compute the raw section start relative to the current funciton profile (offset).
+  auto RelativeRawSectionStart = Header.Reserved - CurrOffset;
   auto RelativeRawProfileAddress =
       endian::readNext<uint32_t, little, unaligned>(Data);
   Profile->RawProfileDataAddress =

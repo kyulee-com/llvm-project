@@ -159,8 +159,7 @@ void MIPSectionEmitter::emitMIPHeader(MIPFileType FileType) {
   OS.AddComment("Module Hash");
   OS.emitIntValueInHex((uint32_t)MD5Hash(MIRInstrumentation::LinkUnitName), 4);
 
-  if (false) {
-  //if (FileType == MIP_FILE_TYPE_MAP) {
+  if (FileType == MIP_FILE_TYPE_MAP) {
     OS.AddComment("Raw Section Start PC Offset");
     OS.emitValue(
         MCBinaryExpr::createSub(
