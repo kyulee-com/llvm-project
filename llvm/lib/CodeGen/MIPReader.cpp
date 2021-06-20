@@ -181,10 +181,11 @@ ErrorOr<std::unique_ptr<MIRProfile>> MIPMapReader::read(const Twine &Filename) {
 
 std::error_code MIPMapReader::readData(std::unique_ptr<MemoryBuffer> &Buffer,
                                        std::unique_ptr<MIRProfile> &MIP) {
-  const char *Data = Buffer->getBufferStart() + MIP->Header.OffsetToData;
+  const char *DataStart = Buffer->getBufferStart();
+  const char *Data = DataStart + MIP->Header.OffsetToData;
 
   while (Data < Buffer->getBufferEnd()) {
-    const auto &Profile = readNextProfile(Data, MIP->Header.Version);
+    const auto &Profile = readNextProfile(Data, DataStart, MIP->Header);
     MIP->Profiles.push_back(*Profile->get());
   }
 
@@ -192,10 +193,12 @@ std::error_code MIPMapReader::readData(std::unique_ptr<MemoryBuffer> &Buffer,
 }
 
 ErrorOr<std::unique_ptr<MFProfile>>
-MIPMapReader::readNextProfile(const char *&Data, uint16_t Version) {
+MIPMapReader::readNextProfile(const char *&Data, const char *DataStart, const MIPHeader& Header) {
+  uint16_t Version = Header.Version;
   std::unique_ptr<MFProfile> Profile(new MFProfile());
-  auto RelativeRawSectionStart =
-      endian::readNext<uint32_t, little, unaligned>(Data);
+  // `reserved` in the header points to the raw section start relative to the map section start.
+  // Compute the raw section start relative to the current funciton profile.
+  auto RelativeRawSectionStart = Header.Reserved + (Data - DataStart);
   auto RelativeRawProfileAddress =
       endian::readNext<uint32_t, little, unaligned>(Data);
   Profile->RawProfileDataAddress =

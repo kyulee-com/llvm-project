@@ -38,7 +38,8 @@ private:
   static std::error_code readData(std::unique_ptr<MemoryBuffer> &Buffer,
                                   std::unique_ptr<MIRProfile> &MIP);
   static ErrorOr<std::unique_ptr<MFProfile>> readNextProfile(const char *&Data,
-                                                             uint16_t Version);
+                                                             const char *DataStart,
+                                                             const MIPHeader& Header);
 };
 
 class MIPRawReader {

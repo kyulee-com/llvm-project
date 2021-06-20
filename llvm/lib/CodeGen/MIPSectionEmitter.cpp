@@ -126,10 +126,10 @@ void MIPSectionEmitter::emitMIPHeader(MIPFileType FileType) {
   auto &OS = *AP.OutStreamer;
   auto &OutContext = OS.getContext();
 
-  OS.emitValueToAlignment(8);
-
   auto *ReferenceLabel = OutContext.createTempSymbol("ref");
   OS.emitLabel(ReferenceLabel);
+
+  OS.emitValueToAlignment(8);
 
   OS.AddComment("Magic");
   OS.emitIntValueInHex(MIP_MAGIC_VALUE, 4);
@@ -158,8 +158,19 @@ void MIPSectionEmitter::emitMIPHeader(MIPFileType FileType) {
   OS.AddComment("Module Hash");
   OS.emitIntValueInHex((uint32_t)MD5Hash(MIRInstrumentation::LinkUnitName), 4);
 
-  // Reserved
-  OS.emitZeros(4);
+  if (false) {
+  //if (FileType == MIP_FILE_TYPE_MAP) {
+    OS.AddComment("Raw Section Start PC Offset");
+    OS.emitValue(
+        MCBinaryExpr::createSub(
+            MCSymbolRefExpr::create(
+                getMIPSectionBeginSymbol(MIP_RAW_SECTION_NAME), OutContext),
+            MCSymbolRefExpr::create(ReferenceLabel, OutContext), OutContext),
+        4);
+  } else {
+    OS.AddComment("Reserved");
+    OS.emitZeros(4);
+  }
 
   OS.AddComment("Offset To Data");
   OS.emitIntValueInHex(sizeof(MIPHeader), 4);
@@ -241,6 +252,7 @@ void MIPSectionEmitter::emitMIPFunctionInfo(MFInfo &Info) {
   //       <Raw Profile Symbol PC Offset> - <Section Start PC Offset>
   auto *ReferenceLabel = OutContext.createTempSymbol("ref");
   OS.emitLabel(ReferenceLabel);
+#if 0
   OS.AddComment("Raw Section Start PC Offset");
   OS.emitValue(
       MCBinaryExpr::createSub(
@@ -248,6 +260,7 @@ void MIPSectionEmitter::emitMIPFunctionInfo(MFInfo &Info) {
               getMIPSectionBeginSymbol(MIP_RAW_SECTION_NAME), OutContext),
           MCSymbolRefExpr::create(ReferenceLabel, OutContext), OutContext),
       4);
+#endif
   OS.AddComment("Raw Profile Symbol PC Offset");
   OS.emitValue(MCBinaryExpr::createSub(
                    MCSymbolRefExpr::create(Info.RawProfileSymbol, OutContext),
