@@ -7,10 +7,31 @@
     .text
     .p2align 2
 
+.macro ALIGN_STACK_16B
+#if defined(__APPLE__)
+        subq    $$8, %rsp
+#else
+        subq    $8, %rsp
+#endif
+        CFI_ADJUST_CFA_OFFSET(8)
+.endm
+
+.macro RESTORE_STACK_ALIGNMENT
+#if defined(__APPLE__)
+        addq    $$8, %rsp
+#else
+        addq    $8, %rsp
+#endif
+.endm
+
 .macro SAVE_STACK_FRAME
     pushfq
 	CFI_ADJUST_CFA_OFFSET(8)
+#if defined(__APPLE__)
+	subq    $$240, %rsp
+#else
 	subq    $240, %rsp
+#endif
 	CFI_ADJUST_CFA_OFFSET(240)
 	movq    %rbp, 232(%rsp)
 	movupd	%xmm0, 216(%rsp)
@@ -59,7 +80,11 @@
 	movq    16(%rsp), %r13
 	movq    8(%rsp), %r14
 	movq    0(%rsp), %r15
-	addq	$240, %rsp
+#if defined(__APPLE__)
+	addq    $$240, %rsp
+#else
+	addq    $240, %rsp
+#endif
 	CFI_ADJUST_CFA_OFFSET(-240)
 	popfq
 	CFI_ADJUST_CFA_OFFSET(-8)
@@ -71,12 +96,15 @@
     ASM_TYPE_FUNCTION(ASM_SYMBOL(__llvm_mip_call_counts_caller))
 ASM_SYMBOL(__llvm_mip_call_counts_caller):
     CFI_STARTPROC
+    //ALIGN_STACK_16B -- When __llvm_mip_call_counts_caller is the very first instruction of the caller, stack is already aligned
+	// Just two return addresses are stacked back-to-back. Not sure if this is okay for ABI.
     SAVE_STACK_FRAME
     movq    PROFILE_REGISTER, %rdi
     // void *Helper(uint64_t ProfileDataAddress)
     callq   ASM_SYMBOL(__llvm_mip_call_counts_instrumentation_helper)
 
     RESTORE_STACK_FRAME
+    //RESTORE_STACK_ALIGNMENT -- with the same reason above, the stack alignment is skipped.
     retq
     CFI_ENDPROC
     ASM_SIZE(__llvm_mip_call_counts_caller)

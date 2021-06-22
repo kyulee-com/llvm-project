@@ -120,7 +120,7 @@ bool MIRInstrumentation::runOnMachineFunction(MachineFunction &MF) {
   } else if (EnableMachineCallGraph) {
     BuildMI(EntryBlock, MBBI, DL, TII.get(TargetOpcode::MIP_INSTRUMENTATION))
         .addReg(TII.getTemporaryMachineProfileRegister(EntryBlock))
-        .addExternalSymbol("__llvm_mip_call_counts_caller");
+        .addExternalSymbol("___llvm_mip_call_counts_caller");
   } else {
     llvm_unreachable(
         "Expected function coverage or call graph instrumentation.");
