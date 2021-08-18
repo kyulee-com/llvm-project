@@ -903,6 +903,9 @@ public:
                                      unsigned Isa, unsigned Discriminator,
                                      StringRef FileName);
 
+  /// This terminates the line table with EndLabel.
+  virtual void emitTerminateLineTable(unsigned CUID, MCSymbol *EndLabel);
+
   /// Associate a filename with a specified logical file number, and also
   /// specify that file's checksum information.  This implements the '.cv_file 4
   /// "foo.c"' assembler directive. Returns true on success.

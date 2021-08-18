@@ -259,6 +259,11 @@ void MCStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
                                   Discriminator);
 }
 
+void MCStreamer::emitTerminateLineTable(unsigned CUID, MCSymbol *EndLabel) {
+  MCDwarfLineTable &LineTable = getContext().getMCDwarfLineTable(CUID);
+  LineTable.getMCLineSections().addEndEntry(EndLabel);
+}
+
 MCSymbol *MCStreamer::getDwarfLineTableSymbol(unsigned CUID) {
   MCDwarfLineTable &Table = getContext().getMCDwarfLineTable(CUID);
   if (!Table.getLabel()) {

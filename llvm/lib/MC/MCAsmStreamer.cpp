@@ -269,6 +269,7 @@ public:
                              unsigned Flags, unsigned Isa,
                              unsigned Discriminator,
                              StringRef FileName) override;
+  void emitTerminateLineTable(unsigned CUID, MCSymbol *EndLabel) override;
   MCSymbol *getDwarfLineTableSymbol(unsigned CUID) override;
 
   bool EmitCVFileDirective(unsigned FileNo, StringRef Filename,
@@ -1615,6 +1616,14 @@ void MCAsmStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
   EmitEOL();
   this->MCStreamer::emitDwarfLocDirective(FileNo, Line, Column, Flags, Isa,
                                           Discriminator, FileName);
+}
+
+void MCAsmStreamer::emitTerminateLineTable(unsigned CUID, MCSymbol *EndLabel) {
+  // If target doesn't support .loc/.file directive, the line entry
+  // must be emitted, so we can terminiate the line table using the last entry.
+  if (!MAI->usesDwarfFileAndLocDirectives()) {
+    this->MCStreamer::emitTerminateLineTable(CUID, EndLabel);
+  }
 }
 
 MCSymbol *MCAsmStreamer::getDwarfLineTableSymbol(unsigned CUID) {
