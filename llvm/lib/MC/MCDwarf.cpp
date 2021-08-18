@@ -107,10 +107,7 @@ void MCDwarfLineEntry::make(MCStreamer *MCOS, MCSection *Section) {
   MCOS->getContext().clearDwarfLocSeen();
 
   // Add the line entry to this section's entries.
-  MCOS->getContext()
-      .getMCDwarfLineTable(MCOS->getContext().getDwarfCompileUnitID())
-      .getMCLineSections()
-      .addLineEntry(LineEntry, Section);
+  MCOS->getContext().addLineEntry(LineEntry, Section);
 }
 
 //
@@ -157,7 +154,22 @@ void MCDwarfLineTable::emitOne(
   MCSymbol *LastLabel = nullptr;
 
   // Loop through each MCDwarfLineEntry and encode the dwarf line number table.
+  bool EndSequenceEmitted = false;
   for (const MCDwarfLineEntry &LineEntry : LineEntries) {
+    MCSymbol *Label = LineEntry.getLabel();
+    const MCAsmInfo *asmInfo = MCOS->getContext().getAsmInfo();
+
+    if (LineEntry.IsEndSequence) {
+      MCOS->emitDwarfAdvanceLineAddr(INT64_MAX, LastLabel, Label,
+                                     asmInfo->getCodePointerSize());
+      Discriminator = 0;
+      LastLabel = nullptr;
+      LastLine = 1;
+      EndSequenceEmitted = true;
+      continue;
+    }
+    EndSequenceEmitted = false;
+
     int64_t LineDelta = static_cast<int64_t>(LineEntry.getLine()) - LastLine;
 
     if (FileNum != LineEntry.getFileNum()) {
@@ -195,12 +207,9 @@ void MCDwarfLineTable::emitOne(
     if (LineEntry.getFlags() & DWARF2_FLAG_EPILOGUE_BEGIN)
       MCOS->emitInt8(dwarf::DW_LNS_set_epilogue_begin);
 
-    MCSymbol *Label = LineEntry.getLabel();
-
     // At this point we want to emit/create the sequence to encode the delta in
     // line numbers and the increment of the address from the previous Label
     // and the current Label.
-    const MCAsmInfo *asmInfo = MCOS->getContext().getAsmInfo();
     MCOS->emitDwarfAdvanceLineAddr(LineDelta, LastLabel, Label,
                                    asmInfo->getCodePointerSize());
 
@@ -208,6 +217,11 @@ void MCDwarfLineTable::emitOne(
     LastLine = LineEntry.getLine();
     LastLabel = Label;
   }
+
+  // If an end sequence is already emitted at the last iteration of the loop,
+  // just skip emitting another end sequence.
+  if (EndSequenceEmitted)
+    return;
 
   // Generate DWARF line end entry.
   MCOS->emitDwarfLineEndEntry(Section, LastLabel);

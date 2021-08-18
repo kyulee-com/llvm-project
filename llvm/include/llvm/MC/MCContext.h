@@ -179,6 +179,9 @@ namespace llvm {
     /// unit are separated.
     std::map<unsigned, MCDwarfLineTable> MCDwarfLineTablesCUMap;
 
+    /// The current MCDwarfLineTable used from the last line entry.
+    MCDwarfLineTable *CurrentMCDwarfLineTable = nullptr;
+
     /// The current dwarf line information from the last dwarf .loc directive.
     MCDwarfLoc CurrentDwarfLoc;
     bool DwarfLocSeen = false;
@@ -692,6 +695,20 @@ namespace llvm {
 
     MCDwarfLineTable &getMCDwarfLineTable(unsigned CUID) {
       return MCDwarfLineTablesCUMap[CUID];
+    }
+
+    // This checks if we emit the line entry for the same CU.
+    // If not, an end sequence is emitted to terminate the prior line
+    // table before adding it to the current line table.
+    void addLineEntry(const MCDwarfLineEntry &LineEntry, MCSection *Sec) {
+      unsigned CUID = getDwarfCompileUnitID();
+      auto *LineTable = &MCDwarfLineTablesCUMap[CUID];
+      if (CurrentMCDwarfLineTable != nullptr &&
+          LineTable != CurrentMCDwarfLineTable) {
+        CurrentMCDwarfLineTable->addEndSequence(LineEntry, Sec);
+      }
+      CurrentMCDwarfLineTable = LineTable;
+      CurrentMCDwarfLineTable->addLineEntry(LineEntry, Sec);
     }
 
     const MCDwarfLineTable &getMCDwarfLineTable(unsigned CUID) const {

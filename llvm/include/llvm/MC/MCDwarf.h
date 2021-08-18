@@ -188,6 +188,10 @@ public:
 
   MCSymbol *getLabel() const { return Label; }
 
+  // This indicates the line entry is synthesized for an end sequence in
+  // the current line table.
+  bool IsEndSequence = false;
+
   // This is called when an instruction is assembled into the specified
   // section and if there is information from the last .loc directive that
   // has yet to have a line entry made for it is made.
@@ -328,6 +332,18 @@ class MCDwarfLineTable {
   MCLineSection MCLineSections;
 
 public:
+  void addEndSequence(const MCDwarfLineEntry &LineEntry, MCSection *Sec) {
+    // Clone the line entry and set it for end_sequence.
+    MCDwarfLineEntry EndSequence = LineEntry;
+    EndSequence.IsEndSequence = true;
+
+    addLineEntry(EndSequence, Sec);
+  }
+
+  void addLineEntry(const MCDwarfLineEntry &LineEntry, MCSection *Sec) {
+    MCLineSections.addLineEntry(LineEntry, Sec);
+  }
+
   // This emits the Dwarf file and the line tables for all Compile Units.
   static void emit(MCStreamer *MCOS, MCDwarfLineTableParams Params);
 
