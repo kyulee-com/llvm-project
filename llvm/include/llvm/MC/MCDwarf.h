@@ -188,6 +188,15 @@ public:
 
   MCSymbol *getLabel() const { return Label; }
 
+  // This indicates the line entry is synthesized for an end entry.
+  bool IsEndEntry = false;
+
+  // Override the label with the given EndLabel.
+  void setEndLabel(MCSymbol *EndLabel) {
+    Label = EndLabel;
+    IsEndEntry = true;
+  }
+
   // This is called when an instruction is assembled into the specified
   // section and if there is information from the last .loc directive that
   // has yet to have a line entry made for it is made.
@@ -203,6 +212,18 @@ public:
   // Add an entry to this MCLineSection's line entries.
   void addLineEntry(const MCDwarfLineEntry &LineEntry, MCSection *Sec) {
     MCLineDivisions[Sec].push_back(LineEntry);
+    PrevSec = Sec;
+  }
+
+  // Create an end entry by cloning the last entry for PrevSec and resetting the
+  // label with the given EndLabel. Append the end entry to the line table.
+  void addEndEntry(MCSymbol *EndLabel) {
+    if (PrevSec) {
+      auto *LastEntry = &MCLineDivisions[PrevSec].back();
+      auto EndEntry = *LastEntry;
+      EndEntry.setEndLabel(EndLabel);
+      MCLineDivisions[PrevSec].push_back(EndEntry);
+    }
   }
 
   using MCDwarfLineEntryCollection = std::vector<MCDwarfLineEntry>;
@@ -213,6 +234,9 @@ public:
 private:
   // A collection of MCDwarfLineEntry for each section.
   MCLineDivisionMap MCLineDivisions;
+
+  // The previous section which a line entry was added for.
+  MCSection *PrevSec = nullptr;
 
 public:
   // Returns the collection of MCDwarfLineEntry for a given Compile Unit ID.

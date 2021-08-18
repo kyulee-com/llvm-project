@@ -494,7 +494,7 @@ DIE &DwarfCompileUnit::updateSubprogramScopeDIE(const DISubprogram *SP) {
           // FIXME: when writing dwo, we need to avoid relocations. Probably
           // the "right" solution is to treat globals the way func and data
           // symbols are (with entries in .debug_addr).
-          // For now, since we only ever use index 0, this should work as-is.       
+          // For now, since we only ever use index 0, this should work as-is.
           addUInt(*Loc, dwarf::DW_FORM_data4, FrameBase.Location.WasmLoc.Index);
         }
         addUInt(*Loc, dwarf::DW_FORM_data1, dwarf::DW_OP_stack_value);

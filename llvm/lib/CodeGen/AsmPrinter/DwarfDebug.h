@@ -786,7 +786,19 @@ public:
 
   /// Returns the previous CU that was being updated
   const DwarfCompileUnit *getPrevCU() const { return PrevCU; }
-  void setPrevCU(const DwarfCompileUnit *PrevCU) { this->PrevCU = PrevCU; }
+
+  /// Set PrevCU with the given NewCU.
+  void setPrevCU(const DwarfCompileUnit *NewCU) {
+    if (PrevCU != nullptr && PrevCU != NewCU)
+      terminateLineTableForPrevCU();
+    PrevCU = NewCU;
+  }
+
+  /// Reset PrevCU.
+  void resetPrevCU() { setPrevCU(nullptr); }
+
+  /// Terminate the line table by adding an end entry for PrevCU.
+  void terminateLineTableForPrevCU();
 
   /// Returns the entries for the .debug_loc section.
   const DebugLocStream &getDebugLocs() const { return DebugLocs; }
