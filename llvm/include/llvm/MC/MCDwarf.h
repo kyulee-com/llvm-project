@@ -196,11 +196,20 @@ private:
   // A collection of MCDwarfLineEntry for each section.
   MCLineDivisionMap MCLineDivisions;
 
+  // Points to the end label of the last function range.
+  MCSymbol *EndLabel = nullptr;
+
 public:
   // Returns the collection of MCDwarfLineEntry for a given Compile Unit ID.
   const MCLineDivisionMap &getMCLineEntries() const {
     return MCLineDivisions;
   }
+
+  // Set the end label from the last function range.
+  void setEndLabel(MCSymbol *FuncEndLabel) { EndLabel = FuncEndLabel; }
+
+  // Get the end label for the CU.
+  MCSymbol *getEndLabel() const { return EndLabel; }
 };
 
 struct MCDwarfLineTableParams {

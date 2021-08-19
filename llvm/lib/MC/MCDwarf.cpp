@@ -162,9 +162,10 @@ makeStartPlusIntExpr(MCContext &Ctx, const MCSymbol &Start, int IntVal) {
 // This emits the Dwarf line table for the specified section from the entries
 // in the LineSection.
 //
-static inline void emitDwarfLineTable(
-    MCStreamer *MCOS, MCSection *Section,
-    const MCLineSection::MCDwarfLineEntryCollection &LineEntries) {
+static inline void
+emitDwarfLineTable(MCStreamer *MCOS, MCSection *Section,
+                   const MCLineSection::MCDwarfLineEntryCollection &LineEntries,
+                   MCSymbol *EndLabel) {
   unsigned FileNum = 1;
   unsigned LastLine = 1;
   unsigned Column = 0;
@@ -227,7 +228,7 @@ static inline void emitDwarfLineTable(
   }
 
   // Generate DWARF line end entry.
-  MCOS->emitDwarfLineEndEntry(Section, LastLabel);
+  MCOS->emitDwarfLineEndEntry(Section, LastLabel, EndLabel);
 }
 
 //
@@ -522,7 +523,8 @@ void MCDwarfLineTable::emitCU(MCStreamer *MCOS, MCDwarfLineTableParams Params,
 
   // Put out the line tables.
   for (const auto &LineSec : MCLineSections.getMCLineEntries())
-    emitDwarfLineTable(MCOS, LineSec.first, LineSec.second);
+    emitDwarfLineTable(MCOS, LineSec.first, LineSec.second,
+                       MCLineSections.getEndLabel());
 
   // This is the end of the section, so set the value of the symbol at the end
   // of this section (that was used in a previous expression).

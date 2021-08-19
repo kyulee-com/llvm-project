@@ -393,7 +393,8 @@ public:
 
   void emitDwarfLineStartLabel(MCSymbol *StartSym) override;
 
-  void emitDwarfLineEndEntry(MCSection *Section, MCSymbol *LastLabel) override;
+  void emitDwarfLineEndEntry(MCSection *Section, MCSymbol *LastLabel,
+                             MCSymbol *EndLabel = nullptr) override;
 
   void emitDwarfAdvanceLineAddr(int64_t LineDelta, const MCSymbol *LastLabel,
                                 const MCSymbol *Label,
@@ -2403,7 +2404,8 @@ void MCAsmStreamer::emitDwarfLineStartLabel(MCSymbol *StartSym) {
 }
 
 void MCAsmStreamer::emitDwarfLineEndEntry(MCSection *Section,
-                                          MCSymbol *LastLabel) {
+                                          MCSymbol *LastLabel,
+                                          MCSymbol *EndLabel) {
   // If the targets write the raw debug line data for assembly output (We can
   // not switch to Section and add the end symbol there for assembly output)
   // we currently use the .text end label as any section end. This will not

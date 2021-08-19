@@ -2202,6 +2202,13 @@ void DwarfDebug::endFunctionImpl(const MachineFunction *MF) {
   for (const auto &R : Asm->MBBSectionRanges)
     TheCU.addRange({R.second.BeginLabel, R.second.EndLabel});
 
+  // Set the end label from the last function range to the CU's line table.
+  assert(!Asm->MBBSectionRanges.empty());
+  Asm->OutStreamer->getContext()
+      .getMCDwarfLineTable(getDwarfCompileUnitIDForLineTable(TheCU))
+      .getMCLineSections()
+      .setEndLabel(Asm->MBBSectionRanges.back().second.EndLabel);
+
   // Under -gmlt, skip building the subprogram if there are no inlined
   // subroutines inside it. But with -fdebug-info-for-profiling, the subprogram
   // is still needed as we need its source location.
