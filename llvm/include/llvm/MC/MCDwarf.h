@@ -20,6 +20,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MD5.h"
 #include <cassert>
@@ -184,20 +185,33 @@ class MCLineSection {
 public:
   // Add an entry to this MCLineSection's line entries.
   void addLineEntry(const MCDwarfLineEntry &LineEntry, MCSection *Sec) {
-    MCLineDivisions[Sec].push_back(LineEntry);
+    MCLineDivisions[Sec].MCDwarfLineEntries.push_back(LineEntry);
+  }
+
+  // Set the end label from the last function range for its section.
+  void setEndLabel(MCSymbol *FuncEndLabel) {
+    MCSection *Sec = &FuncEndLabel->getSection();
+    MCLineDivisions[Sec].EndLabel = FuncEndLabel;
   }
 
   using MCDwarfLineEntryCollection = std::vector<MCDwarfLineEntry>;
   using iterator = MCDwarfLineEntryCollection::iterator;
   using const_iterator = MCDwarfLineEntryCollection::const_iterator;
-  using MCLineDivisionMap = MapVector<MCSection *, MCDwarfLineEntryCollection>;
+
+  struct MCDwarfLineEntryCollectionEndLabel {
+    MCDwarfLineEntryCollection MCDwarfLineEntries;
+    MCSymbol *EndLabel = nullptr;
+  };
+  using MCLineDivisionMap =
+      MapVector<MCSection *, MCDwarfLineEntryCollectionEndLabel>;
 
 private:
-  // A collection of MCDwarfLineEntry for each section.
+  // A collection of MCDwarfLineEntry and EndLabel for each section.
   MCLineDivisionMap MCLineDivisions;
 
 public:
-  // Returns the collection of MCDwarfLineEntry for a given Compile Unit ID.
+  // Returns the collection of MCDwarfLineEntry and EndLabel for a given Compile
+  // Unit ID.
   const MCLineDivisionMap &getMCLineEntries() const {
     return MCLineDivisions;
   }
