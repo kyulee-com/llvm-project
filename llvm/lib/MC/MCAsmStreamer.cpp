@@ -2416,15 +2416,16 @@ void MCAsmStreamer::emitDwarfLineEndEntry(MCSection *Section,
 
   MCContext &Ctx = getContext();
 
-  // FIXME: use section end symbol as end of the Section. We need to consider
-  // the explicit sections and -ffunction-sections when we try to generate or
-  // find section end symbol for the Section.
-  MCSection *TextSection = Ctx.getObjectFileInfo()->getTextSection();
-  assert(TextSection->hasEnded() && ".text section is not end!");
+  // When EndLabel is null (from AsmParser), conservatively Text section end
+  // symbol as EndLabel.
+  if (!EndLabel) {
+    MCSection *TextSection = Ctx.getObjectFileInfo()->getTextSection();
+    assert(TextSection->hasEnded() && ".text section is not end!");
 
-  MCSymbol *SectionEnd = TextSection->getEndSymbol(Ctx);
+    EndLabel = TextSection->getEndSymbol(Ctx);
+  }
   const MCAsmInfo *AsmInfo = Ctx.getAsmInfo();
-  emitDwarfAdvanceLineAddr(INT64_MAX, LastLabel, SectionEnd,
+  emitDwarfAdvanceLineAddr(INT64_MAX, LastLabel, EndLabel,
                            AsmInfo->getCodePointerSize());
 }
 
