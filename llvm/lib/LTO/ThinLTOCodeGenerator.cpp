@@ -923,6 +923,8 @@ ThinLTOCodeGenerator::writeGeneratedObject(int count, StringRef CacheEntryPath,
 }
 
 // Main entry point for the ThinLTO processing
+extern "C" void __llvm_profile_set_filename(const char *Name);
+extern "C" int __llvm_mip_dump(int ProfileKind, const char *FileName);
 void ThinLTOCodeGenerator::run() {
   // Prepare the resulting object vector
   assert(ProducedBinaries.empty() && "The generator should not be reused");
@@ -1165,4 +1167,6 @@ void ThinLTOCodeGenerator::run() {
   if (llvm::AreStatisticsEnabled())
     llvm::PrintStatistics();
   reportAndResetTimings();
+   __llvm_profile_set_filename("/Users/kyulee/build-pika13-rel12-base/libLTO.pof");
+   __llvm_mip_dump(0, NULL);
 }
