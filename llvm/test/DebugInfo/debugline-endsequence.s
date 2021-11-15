@@ -1,5 +1,7 @@
 # RUN: llvm-mc -filetype=obj -triple=x86_64 %s -o - | llvm-dwarfdump --debug-line - | FileCheck %s
 
+# REQUIRES: x86-registered-target
+
 # The line table is open in the MC path.
 # The end sequence is emitted using the section end label.
 
