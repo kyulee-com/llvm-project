@@ -26,6 +26,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -56,6 +57,13 @@
 using namespace llvm;
 
 #define DEBUG_TYPE "instrprof"
+
+namespace llvm {
+cl::opt<bool>
+    DebugInfoCorrelate("debug-info-correlate", cl::ZeroOrMore,
+                       cl::desc("Use debug info to correlate profiles."),
+                       cl::init(false));
+} // namespace llvm
 
 namespace {
 
@@ -641,6 +649,12 @@ void InstrProfiling::computeNumValueSiteCounts(InstrProfValueProfileInst *Ind) {
 }
 
 void InstrProfiling::lowerValueProfileInst(InstrProfValueProfileInst *Ind) {
+  // TODO: Value profiling heavily depends on the data section which is omitted
+  // in lightweight mode. We need to move the value profile pointer to the
+  // Counter struct to get this working.
+  assert(
+      !DebugInfoCorrelate &&
+      "Value profiling is not yet supported with lightweight instrumentation");
   GlobalVariable *Name = Ind->getName();
   auto It = ProfileDataMap.find(Name);
   assert(It != ProfileDataMap.end() && It->second.DataVar &&
@@ -916,6 +930,36 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
   MaybeSetComdat(CounterPtr);
   CounterPtr->setLinkage(Linkage);
   PD.RegionCounters = CounterPtr;
+  if (DebugInfoCorrelate) {
+    if (auto *SP = Fn->getSubprogram()) {
+      DIBuilder DB(*M, true, SP->getUnit());
+      Metadata *FunctionNameAnnotation[] = {
+          MDString::get(Ctx, "Function Name"),
+          MDString::get(Ctx, getPGOFuncNameVarInitializer(NamePtr)),
+      };
+      Metadata *CFGHashAnnotation[] = {
+          MDString::get(Ctx, "CFG Hash"),
+          ConstantAsMetadata::get(Inc->getHash()),
+      };
+      Metadata *NumCountersAnnotation[] = {
+          MDString::get(Ctx, "Num Counters"),
+          ConstantAsMetadata::get(Inc->getNumCounters()),
+      };
+      auto Annotations = DB.getOrCreateArray({
+          MDNode::get(Ctx, FunctionNameAnnotation),
+          MDNode::get(Ctx, CFGHashAnnotation),
+          MDNode::get(Ctx, NumCountersAnnotation),
+      });
+      auto *DICounter = DB.createGlobalVariableExpression(
+          SP, CounterPtr->getName(), /*LinkageName=*/StringRef(), SP->getFile(),
+          /*LineNo=*/0, DB.createUnspecifiedType("Profile Data Type"),
+          CounterPtr->hasLocalLinkage(), /*IsDefined=*/true, /*Expr=*/nullptr,
+          /*Decl=*/nullptr, /*TemplateParams=*/nullptr, /*AlignInBits=*/0,
+          Annotations);
+      CounterPtr->addDebugInfo(DICounter);
+      DB.finalize();
+    }
+  }
 
   auto *Int8PtrTy = Type::getInt8PtrTy(Ctx);
   // Allocate statically the array of pointers to value profile nodes for
@@ -938,6 +982,9 @@ InstrProfiling::getOrCreateRegionCounters(InstrProfIncrementInst *Inc) {
     ValuesPtrExpr =
         ConstantExpr::getBitCast(ValuesVar, Type::getInt8PtrTy(Ctx));
   }
+
+  if (DebugInfoCorrelate)
+    return PD.RegionCounters;
 
   // Create data variable.
   auto *IntPtrTy = M->getDataLayout().getIntPtrType(M->getContext());
