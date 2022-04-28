@@ -2398,7 +2398,7 @@ void TokenAnnotator::annotate(AnnotatedLine &Line) {
 
 // This function heuristically determines whether 'Current' starts the name of a
 // function declaration.
-static bool isFunctionDeclarationName(const FormatToken &Current,
+static bool isFunctionDeclarationName(bool IsCpp, const FormatToken &Current,
                                       const AnnotatedLine &Line) {
   auto skipOperatorName = [](const FormatToken *Next) -> const FormatToken * {
     for (; Next; Next = Next->Next) {
@@ -2476,14 +2476,21 @@ static bool isFunctionDeclarationName(const FormatToken &Current,
   if (Next->MatchingParen->Next &&
       Next->MatchingParen->Next->is(TT_PointerOrReference))
     return true;
-  // Check for K&R C function definitions, e.g.:
+
+  // Check for K&R C function definitions (and C++ function definitions with
+  // unnamed parameters), e.g.:
   //   int f(i)
   //   {
   //     return i + 1;
   //   }
-  if (Next->Next && Next->Next->is(tok::identifier) &&
-      Line.Last->isNot(tok::semi))
+  //   bool g(size_t = 0, bool b = false)
+  //   {
+  //     return !b;
+  //   }
+  if (IsCpp && Next->Next && Next->Next->is(tok::identifier) &&
+      !Line.endsWith(tok::semi))
     return true;
+
   for (const FormatToken *Tok = Next->Next; Tok && Tok != Next->MatchingParen;
        Tok = Tok->Next) {
     if (Tok->is(TT_TypeDeclarationParen))
@@ -2544,7 +2551,7 @@ void TokenAnnotator::calculateFormattingInformation(AnnotatedLine &Line) {
     calculateArrayInitializerColumnList(Line);
 
   while (Current) {
-    if (isFunctionDeclarationName(*Current, Line))
+    if (isFunctionDeclarationName(Style.isCpp(), *Current, Line))
       Current->setType(TT_FunctionDeclarationName);
     if (Current->is(TT_LineComment)) {
       if (Current->Previous->is(BK_BracedInit) &&
@@ -3597,6 +3604,16 @@ static bool isAllmanLambdaBrace(const FormatToken &Tok) {
           !Tok.isOneOf(TT_ObjCBlockLBrace, TT_DictLiteral));
 }
 
+// Returns the first token on the line that is not a comment.
+static const FormatToken *getFirstNonComment(const AnnotatedLine &Line) {
+  const FormatToken *Next = Line.First;
+  if (!Next)
+    return Next;
+  if (Next->is(tok::comment))
+    Next = Next->getNextNonComment();
+  return Next;
+}
+
 bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
                                      const FormatToken &Right) {
   const FormatToken &Left = *Right.Previous;
@@ -3778,12 +3795,34 @@ bool TokenAnnotator::mustBreakBefore(const AnnotatedLine &Line,
   if (Right.is(TT_InlineASMBrace))
     return Right.HasUnescapedNewline;
 
-  if (isAllmanBrace(Left) || isAllmanBrace(Right))
-    return (Line.startsWith(tok::kw_enum) && Style.BraceWrapping.AfterEnum) ||
-           (Line.startsWith(tok::kw_typedef, tok::kw_enum) &&
-            Style.BraceWrapping.AfterEnum) ||
-           (Line.startsWith(tok::kw_class) && Style.BraceWrapping.AfterClass) ||
+  if (isAllmanBrace(Left) || isAllmanBrace(Right)) {
+    auto FirstNonComment = getFirstNonComment(Line);
+    bool AccessSpecifier =
+        FirstNonComment &&
+        FirstNonComment->isOneOf(Keywords.kw_internal, tok::kw_public,
+                                 tok::kw_private, tok::kw_protected);
+
+    if (Style.BraceWrapping.AfterEnum) {
+      if (Line.startsWith(tok::kw_enum) ||
+          Line.startsWith(tok::kw_typedef, tok::kw_enum))
+        return true;
+      // Ensure BraceWrapping for `public enum A {`.
+      if (AccessSpecifier && FirstNonComment->Next &&
+          FirstNonComment->Next->is(tok::kw_enum))
+        return true;
+    }
+
+    // Ensure BraceWrapping for `public interface A {`.
+    if (Style.BraceWrapping.AfterClass &&
+        ((AccessSpecifier && FirstNonComment->Next &&
+          FirstNonComment->Next->is(Keywords.kw_interface)) ||
+         Line.startsWith(Keywords.kw_interface)))
+      return true;
+
+    return (Line.startsWith(tok::kw_class) && Style.BraceWrapping.AfterClass) ||
            (Line.startsWith(tok::kw_struct) && Style.BraceWrapping.AfterStruct);
+  }
+
   if (Left.is(TT_ObjCBlockLBrace) &&
       Style.AllowShortBlocksOnASingleLine == FormatStyle::SBS_Never)
     return true;

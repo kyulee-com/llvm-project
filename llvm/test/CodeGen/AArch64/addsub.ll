@@ -232,7 +232,7 @@ define i1 @sadd_add(i32 %a, i32 %b, i32* %p) {
 ; CHECK-NEXT:    mvn w8, w0
 ; CHECK-NEXT:    adds w8, w8, w1
 ; CHECK-NEXT:    cset w0, vs
-; CHECK-NEXT:    add w8, w8, #1
+; CHECK-NEXT:    add w8, w8, #1 // =1
 ; CHECK-NEXT:    str w8, [x2]
 ; CHECK-NEXT:    ret
   %nota = xor i32 %a, -1
@@ -253,7 +253,7 @@ define i1 @uadd_add(i8 %a, i8 %b, i8* %p) {
 ; CHECK-NEXT:    and w8, w8, #0xff
 ; CHECK-NEXT:    add w8, w8, w1, uxtb
 ; CHECK-NEXT:    lsr w0, w8, #8
-; CHECK-NEXT:    add w8, w8, #1
+; CHECK-NEXT:    add w8, w8, #1 // =1
 ; CHECK-NEXT:    strb w8, [x2]
 ; CHECK-NEXT:    ret
   %nota = xor i8 %a, -1

@@ -4168,7 +4168,8 @@ bool AArch64TargetLowering::shouldExtendGSIndex(EVT VT, EVT &EltTy) const {
 
 bool AArch64TargetLowering::shouldRemoveExtendFromGSIndex(EVT VT) const {
   if (VT.getVectorElementType() == MVT::i32 &&
-      VT.getVectorElementCount().getKnownMinValue() >= 4)
+      VT.getVectorElementCount().getKnownMinValue() >= 4 &&
+      !VT.isFixedLengthVector())
     return true;
 
   return false;
@@ -4360,8 +4361,13 @@ SDValue AArch64TargetLowering::LowerMGATHER(SDValue Op,
   if (IsFixedLength) {
     assert(Subtarget->useSVEForFixedLengthVectors() &&
            "Cannot lower when not using SVE for fixed vectors");
-    IndexVT = getContainerForFixedLengthVector(DAG, IndexVT);
-    MemVT = IndexVT.changeVectorElementType(MemVT.getVectorElementType());
+    if (MemVT.getScalarSizeInBits() <= IndexVT.getScalarSizeInBits()) {
+      IndexVT = getContainerForFixedLengthVector(DAG, IndexVT);
+      MemVT = IndexVT.changeVectorElementType(MemVT.getVectorElementType());
+    } else {
+      MemVT = getContainerForFixedLengthVector(DAG, MemVT);
+      IndexVT = MemVT.changeTypeToInteger();
+    }
     InputVT = DAG.getValueType(MemVT.changeTypeToInteger());
     Mask = DAG.getNode(
         ISD::ZERO_EXTEND, DL,
@@ -4460,8 +4466,13 @@ SDValue AArch64TargetLowering::LowerMSCATTER(SDValue Op,
   if (IsFixedLength) {
     assert(Subtarget->useSVEForFixedLengthVectors() &&
            "Cannot lower when not using SVE for fixed vectors");
-    IndexVT = getContainerForFixedLengthVector(DAG, IndexVT);
-    MemVT = IndexVT.changeVectorElementType(MemVT.getVectorElementType());
+    if (MemVT.getScalarSizeInBits() <= IndexVT.getScalarSizeInBits()) {
+      IndexVT = getContainerForFixedLengthVector(DAG, IndexVT);
+      MemVT = IndexVT.changeVectorElementType(MemVT.getVectorElementType());
+    } else {
+      MemVT = getContainerForFixedLengthVector(DAG, MemVT);
+      IndexVT = MemVT.changeTypeToInteger();
+    }
     InputVT = DAG.getValueType(MemVT.changeTypeToInteger());
 
     StoreVal =
@@ -13761,6 +13772,8 @@ static bool isEssentiallyExtractHighSubvector(SDValue N) {
   if (N.getOpcode() == ISD::BITCAST)
     N = N.getOperand(0);
   if (N.getOpcode() != ISD::EXTRACT_SUBVECTOR)
+    return false;
+  if (N.getOperand(0).getValueType().isScalableVector())
     return false;
   return cast<ConstantSDNode>(N.getOperand(1))->getAPIntValue() ==
          N.getOperand(0).getValueType().getVectorNumElements() / 2;

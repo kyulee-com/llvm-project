@@ -5425,15 +5425,6 @@ void LoopVectorizationCostModel::collectLoopUniforms(ElementCount VF) {
         }
       }
 
-      // ExtractValue instructions must be uniform, because the operands are
-      // known to be loop-invariant.
-      if (auto *EVI = dyn_cast<ExtractValueInst>(&I)) {
-        assert(isOutOfScope(EVI->getAggregateOperand()) &&
-               "Expected aggregate value to be loop invariant");
-        addToWorklistIfAllowed(EVI);
-        continue;
-      }
-
       // If there's no pointer operand, there's nothing to do.
       auto *Ptr = getLoadStorePointerOperand(&I);
       if (!Ptr)

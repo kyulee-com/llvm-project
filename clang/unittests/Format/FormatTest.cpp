@@ -8247,11 +8247,50 @@ TEST_F(FormatTest, ReturnTypeBreakingStyle) {
                "  return a + b < c;\n"
                "};",
                Style);
+  verifyFormat("byte *\n" // Break here.
+               "f(a)\n"   // Break here.
+               "byte a[];\n"
+               "{\n"
+               "  return a;\n"
+               "}",
+               Style);
+  verifyFormat("bool f(int a, int) override;\n"
+               "Bar g(int a, Bar) final;\n"
+               "Bar h(a, Bar) final;",
+               Style);
+  verifyFormat("int\n"
+               "f(a)",
+               Style);
+  verifyFormat("bool\n"
+               "f(size_t = 0, bool b = false)\n"
+               "{\n"
+               "  return !b;\n"
+               "}",
+               Style);
   // The return breaking style doesn't affect object definitions with
   // attribute-like macros.
   verifyFormat("Tttttttttttttttttttttttt ppppppppppppppp\n"
                "    ABSL_GUARDED_BY(mutex) = {};",
                getGoogleStyleWithColumns(40));
+
+  // The return breaking style doesn't affect:
+  // * function and object definitions with attribute-like macros
+  verifyFormat("Tttttttttttttttttttttttt ppppppppppppppp\n"
+               "    ABSL_GUARDED_BY(mutex) = {};",
+               getGoogleStyleWithColumns(40));
+  verifyFormat("Tttttttttttttttttttttttt ppppppppppppppp\n"
+               "    ABSL_GUARDED_BY(mutex);  // comment",
+               getGoogleStyleWithColumns(40));
+  verifyFormat("Tttttttttttttttttttttttt ppppppppppppppp\n"
+               "    ABSL_GUARDED_BY(mutex1)\n"
+               "        ABSL_GUARDED_BY(mutex2);",
+               getGoogleStyleWithColumns(40));
+  verifyFormat("Tttttt f(int a, int b)\n"
+               "    ABSL_GUARDED_BY(mutex1)\n"
+               "        ABSL_GUARDED_BY(mutex2);",
+               getGoogleStyleWithColumns(40));
+  // * typedefs
+  verifyFormat("typedef ATTR(X) char x;", getGoogleStyle());
 
   Style = getGNUStyle();
 
@@ -17750,13 +17789,25 @@ TEST_F(FormatTest, CatchAlignArrayOfStructuresRightAlignment) {
 TEST_F(FormatTest, CatchAlignArrayOfStructuresLeftAlignment) {
   auto Style = getLLVMStyle();
   Style.AlignArrayOfStructures = FormatStyle::AIAS_Left;
+  /* FIXME: This case gets misformatted.
+  verifyFormat("auto foo = Items{\n"
+               "    Section{0, bar(), },\n"
+               "    Section{1, boo()  }\n"
+               "};\n",
+               Style);
+  */
+  verifyFormat("auto foo = Items{\n"
+               "    Section{\n"
+               "            0, bar(),\n"
+               "            }\n"
+               "};\n",
+               Style);
   verifyFormat("struct test demo[] = {\n"
                "    {56, 23,    \"hello\"},\n"
                "    {-1, 93463, \"world\"},\n"
                "    {7,  5,     \"!!\"   }\n"
                "};\n",
                Style);
-
   verifyFormat("struct test demo[] = {\n"
                "    {56, 23,    \"hello\"}, // first line\n"
                "    {-1, 93463, \"world\"}, // second line\n"

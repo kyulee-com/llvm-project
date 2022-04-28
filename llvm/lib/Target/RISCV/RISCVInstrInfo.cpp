@@ -999,7 +999,7 @@ bool RISCVInstrInfo::isFunctionSafeToOutlineFrom(
 bool RISCVInstrInfo::isMBBSafeToOutlineFrom(MachineBasicBlock &MBB,
                                             unsigned &Flags) const {
   // More accurate safety checking is done in getOutliningCandidateInfo.
-  return true;
+  return TargetInstrInfo::isMBBSafeToOutlineFrom(MBB, Flags);
 }
 
 // Enum values indicating how an outlined call should be constructed.
@@ -1233,7 +1233,7 @@ bool RISCVInstrInfo::findCommutedOpIndices(const MachineInstr &MI,
         // Both of operands are not fixed. Set one of commutable
         // operands to the tied source.
         CommutableOpIdx1 = 1;
-      } else if (SrcOpIdx1 == CommutableOpIdx1) {
+      } else if (SrcOpIdx1 == CommuteAnyOperandIndex) {
         // Only one of the operands is not fixed.
         CommutableOpIdx1 = SrcOpIdx2;
       }

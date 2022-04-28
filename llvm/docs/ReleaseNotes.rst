@@ -5,11 +5,6 @@ LLVM 14.0.0 Release Notes
 .. contents::
     :local:
 
-.. warning::
-   These are in-progress notes for the upcoming LLVM 14 release.
-   Release notes for previous releases can be found on
-   `the Download Page <https://releases.llvm.org/download.html>`_.
-
 
 Introduction
 ============
@@ -53,10 +48,25 @@ Non-comprehensive list of changes in this release
 
 * ...
 
+* Flang is now included in the binary packages released by LLVM.
+
+* The debuginfo-test project has been renamed cross-project-tests and is now
+  intended for testing components from multiple projects, not just debug
+  information. The new "cross-project-tests" name replaces "debuginfo-test" in
+  LLVM_ENABLE_PROJECTS, and a new check-cross-project-tests target has been
+  added for running all tests in the project. The pre-existing check-debuginfo-
+  test target remains for running just the debug information tests.
+  (`D95339 <https://reviews.llvm.org/D95339>`_ and
+  `D96513 <https://reviews.llvm.org/D96513>`_)
+
 Changes to the LLVM IR
 ----------------------
 
 * ...
+
+* Using the legacy pass manager for the optimization pipeline is deprecated and
+  will be removed after LLVM 14. In the meantime, only minimal effort will be
+  made to maintain the legacy pass manager for the optimization pipeline.
 
 Changes to building LLVM
 ------------------------
@@ -69,12 +79,18 @@ Changes to TableGen
 Changes to the AArch64 Backend
 ------------------------------
 
-* ...
+* Introduced assembly support for Armv9-A's Realm Management Extension (RME)
+  and Scalable Matrix Extension (SME).
+
+* Produce proper cross-section relative relocations on COFF
+
+* Fixed the calling convention on Windows for variadic functions involving
+  floats in the fixed arguments
 
 Changes to the ARM Backend
 --------------------------
 
-During this release ...
+* Produce proper cross-section relative relocations on COFF
 
 Changes to the MIPS Target
 --------------------------
@@ -143,8 +159,29 @@ Changes to the LLVM tools
 
 * ...
 
+* llvm-rc got support for invoking Clang to preprocess its input.
+  (`D100755 <https://reviews.llvm.org/D100755>`_)
+
+* llvm-rc got a GNU windres compatible frontend, llvm-windres.
+  (`D100756 <https://reviews.llvm.org/D100756>`_)
+
+* llvm-ml has improved compatibility with MS ml.exe, managing to assemble
+  more asm files.
+
 Changes to LLDB
 ---------------------------------
+
+* LLDB executable is now included in pre-built LLVM binaries.
+
+* LLDB now includes full featured support for AArch64 SVE register access.
+
+* LLDB now supports AArch64 Pointer Authentication, allowing stack unwind with signed return address.
+
+* LLDB now supports debugging programs on AArch64 Linux that use memory tagging (MTE).
+* Added ``memory tag read`` and ``memory tag write`` commands.
+* The ``memory region`` command will note when a region has memory tagging enabled.
+* Synchronous and asynchronous tag faults are recognised.
+* Synchronous tag faults have memory tag annotations in addition to the usual fault address.
 
 Changes to Sanitizers
 ---------------------

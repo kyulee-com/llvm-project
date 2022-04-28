@@ -155,7 +155,7 @@ template <typename T> struct DenseMapInfo<lld::wasm::ImportKey<T>> {
     return lhs == rhs;
   }
 };
-}
+} // end namespace llvm
 
 namespace lld {
 namespace wasm {

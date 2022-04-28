@@ -1380,8 +1380,7 @@ static void readConfigs(opt::InputArgList &args) {
   // symbols not specified by --dynamic-list are non-preemptible.
   config->symbolic =
       config->bsymbolic == BsymbolicKind::All || args.hasArg(OPT_dynamic_list);
-  for (auto *arg :
-       args.filtered(OPT_dynamic_list, OPT_export_dynamic_symbol_list))
+  for (auto *arg : args.filtered(OPT_dynamic_list))
     if (Optional<MemoryBufferRef> buffer = readFile(arg->getValue()))
       readDynamicList(*buffer);
 
@@ -2094,7 +2093,11 @@ static void redirectSymbols(ArrayRef<WrappedSymbol> wrapped) {
               : sym1->section == sym2->section && sym1->value == sym2->value) {
         // Due to an assembler design flaw, if foo is defined, .symver foo,
         // foo@v1 defines both foo and foo@v1. Unless foo is bound to a
+<<<<<<< HEAD
         // different version, GNU ld makes foo@v1 canonical and eliminates foo.
+=======
+        // different version, GNU ld makes foo@v1 canonical and elimiates foo.
+>>>>>>> upstream/release/13.x
         // Emulate its behavior, otherwise we would have foo or foo@@v1 beside
         // foo@v1. foo@v1 and foo combining does not apply if they are not
         // defined in the same place.

@@ -1,5 +1,5 @@
 ====================================================
-Extra Clang Tools 14.0.0 (In-Progress) Release Notes
+Extra Clang Tools 13.0.0 Release Notes
 ====================================================
 
 .. contents::
@@ -7,12 +7,6 @@ Extra Clang Tools 14.0.0 (In-Progress) Release Notes
    :depth: 3
 
 Written by the `LLVM Team <https://llvm.org/>`_
-
-.. warning::
-
-   These are in-progress notes for the upcoming Extra Clang Tools 14 release.
-   Release notes for previous releases can be found on
-   `the Download Page <https://releases.llvm.org/download.html>`_.
 
 Introduction
 ============
@@ -47,7 +41,93 @@ Major New Features
 Improvements to clangd
 ----------------------
 
-The improvements are...
+Code Completion
+^^^^^^^^^^^^^^^
+
+- ML based model is used by default for ranking completion candidates.
+
+- Support for completion of attributes.
+
+- Improved handling of Objective-C(++) constructs.
+
+
+Hover
+^^^^^
+
+- Shows documentation for Attributes.
+
+- Displays resolved paths for includes.
+
+- Shows padding for fields.
+
+Document Outline
+^^^^^^^^^^^^^^^^
+
+- Contains information in detail field about extra type information
+
+- Macro expansions now show up in the tree
+
+- Improved handling of Objective-C(++) constructs.
+
+Code Navigation
+^^^^^^^^^^^^^^^^
+
+- Cross references surfaces occurrences for calls to overridden methods and
+  declarations.
+
+Semantic Highlighting
+^^^^^^^^^^^^^^^^^^^^^
+
+- Support for legacy semantic tokens extension is dropped.
+
+- Better support for Objective-C(++) constructs and dependent code.
+
+
+Diagnostics
+^^^^^^^^^^^
+
+- Diagnostics for unused/deprecated code are tagged according to LSP.
+
+- Clang-tidy checks that operate at translation-unit level are now available.
+
+System Integration
+^^^^^^^^^^^^^^^^^^
+
+- Compile flag parsing has been improved to be more resilient against multiple
+  jobs.
+
+- Better error reporting when compile flags are unusable.
+
+
+Miscellaneous
+^^^^^^^^^^^^^
+
+- Better support for TUs with circular includes (e.g. templated header vs
+  implementation file).
+
+- Compile flags for headers are inferred from files known to be including them
+  when possible.
+
+- Version info contains information about compile-time setup of clangd
+
+- FeatureModule mechanism has been introduced to make contribution of vertical
+  features to clangd easier, by making it possible to write features that can
+  interact with clangd-core without touching it.
+
+- There's an extension for inlay-hints for deduced types and parameter names,
+  hidden behind -inlay-hints flag.
+
+- Rename is more robust:
+
+  - Won't trigger on non-identifiers.
+  - Makes use of dirty buffers for open files.
+
+- Improvements to dex query latency.
+
+- There's a remote-index service for LLVM at http://clangd-index.llvm.org/.
+
+- There's a remote-index service for Chromium at
+  https://linux.clangd-index.chromium.org/.
 
 Improvements to clang-doc
 -------------------------
@@ -72,6 +152,56 @@ The improvements are...
 New checks
 ^^^^^^^^^^
 
+
+- New :doc:`altera-id-dependent-backward-branch
+  <clang-tidy/checks/altera-id-dependent-backward-branch>` check.
+
+  Finds ID-dependent variables and fields that are used within loops. This
+  causes branches to occur inside the loops, and thus leads to performance
+  degradation.
+
+- New :doc:`altera-unroll-loops
+  <clang-tidy/checks/altera-unroll-loops>` check.
+
+  Finds inner loops that have not been unrolled, as well as fully unrolled
+  loops with unknown loops bounds or a large number of iterations.
+
+- New :doc:`bugprone-easily-swappable-parameters
+  <clang-tidy/checks/bugprone-easily-swappable-parameters>` check.
+
+  Finds function definitions where parameters of convertible types follow each
+  other directly, making call sites prone to calling the function with
+  swapped (or badly ordered) arguments.
+
+- New :doc:`bugprone-implicit-widening-of-multiplication-result
+  <clang-tidy/checks/bugprone-implicit-widening-of-multiplication-result>` check.
+
+  Diagnoses instances of an implicit widening of multiplication result.
+
+- New :doc:`bugprone-unhandled-exception-at-new
+  <clang-tidy/checks/bugprone-unhandled-exception-at-new>` check.
+
+  Finds calls to ``new`` with missing exception handler for ``std::bad_alloc``.
+
+- New :doc:`concurrency-thread-canceltype-asynchronous
+  <clang-tidy/checks/concurrency-thread-canceltype-asynchronous>` check.
+
+  Finds ``pthread_setcanceltype`` function calls where a thread's cancellation
+  type is set to asynchronous.
+
+- New :doc:`cppcoreguidelines-prefer-member-initializer
+  <clang-tidy/checks/cppcoreguidelines-prefer-member-initializer>` check.
+
+  Finds member initializations in the constructor body which can be placed into
+  the initialization list instead.
+
+- New :doc:`readability-suspicious-call-argument
+  <clang-tidy/checks/readability-suspicious-call-argument>` check.
+
+  Finds function calls where the arguments passed are provided out of order,
+  based on the difference between the argument name and the parameter names
+  of the function.
+
 New check aliases
 ^^^^^^^^^^^^^^^^^
 
@@ -82,10 +212,30 @@ Changes in existing checks
 
   Removed generating fixes for enums because the code generated was broken, trying to initialize the enum from an integer.
 
+- Improved :doc:`cppcoreguidelines-init-variables
+  <clang-tidy/checks/cppcoreguidelines-init-variables>` check.
+
+  Removed generating fixes for enums because the code generated was broken,
+  trying to initialize the enum from an integer.
+
   The check now also warns for uninitialized scoped enums.
+
+- Improved :doc:`readability-uniqueptr-delete-release
+  <clang-tidy/checks/readability-uniqueptr-delete-release>` check.
+
+  Added an option to choose whether to refactor by calling the ``reset`` member
+  function or assignment to ``nullptr``.
+  Added support for pointers to ``std::unique_ptr``.
+
 
 Removed checks
 ^^^^^^^^^^^^^^
+
+- The readability-deleted-default check has been removed.
+
+  The clang warning `Wdefaulted-function-deleted
+  <https://clang.llvm.org/docs/DiagnosticsReference.html#wdefaulted-function-deleted>`_
+  will diagnose the same issues and is enabled by default.
 
 Improvements to include-fixer
 -----------------------------
