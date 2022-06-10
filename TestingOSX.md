@@ -72,12 +72,12 @@ The first step is probably once, and you may repeat the remaining steps with dif
    They are ``lib/libLTO.dylib.lto.bc`` (prestine bitcode just merged),
    ``lib/libLTO.dylib.lto.opt.bc`` (optimized bitcode),
    and ``lib/libLTO.dylib.o`` (resulting object file).
-   and get the similar output:
+   To get the similar output with function merging:
       * `` $HOME/build-bootstrap/bin/opt -func-merging lib/libLTO.dylib.lto.bc -o lib/libLTO.dylib.lto.funcmerging.bc``
-      * `` $HOME/build-bootstrap/bin/opt -Oz lib/libLTO.dylib.lto.funcmerging.bc -o lib/libLTO.dylib.lto.funcmerging.Oz.bc``
-      * `` $HOME/build-bootstrap/bin/llc -filetype=obj lib/libLTO.dylib.lto.funcmerging.Oz.bc -o lib/libLTO.dylib.lto.funcmerging.Oz.o``
+      * `` $HOME/build-bootstrap/bin/opt -Os lib/libLTO.dylib.lto.funcmerging.bc -o lib/libLTO.dylib.lto.funcmerging.Os.bc``
+      * `` $HOME/build-bootstrap/bin/llc -filetype=obj lib/libLTO.dylib.lto.funcmerging.Os.bc -o lib/libLTO.dylib.lto.funcmerging.Os.o``
 
 4. Compare the text section size.
 
       * ``size -m lib/libLTO.dylib.o | grep text `` for baseline
-      * ``size -m lib/libLTO.dylib.lto.funcmerging.Oz.o | grep text `` for function merging
+      * ``size -m lib/libLTO.dylib.lto.funcmerging.Os.o | grep text `` for function merging
