@@ -250,8 +250,9 @@ private:
 
   /// Determine what potential relocations may be needed by this constant.
   PossibleRelocationsTy getRelocationInfo() const;
-
+public:
   bool hasNLiveUses(unsigned N) const;
+  unsigned getLiveUses() const;
 };
 
 } // end namespace llvm

@@ -989,7 +989,10 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
     MPM.addPass(SyntheticCountsPropagation());
 
   if (EnableModuleInliner)
+  {
+    errs() <<"kyulee adding module inliner\n";
     MPM.addPass(buildModuleInlinerPipeline(Level, Phase));
+  }
   else
     MPM.addPass(buildInlinerPipeline(Level, Phase));
 

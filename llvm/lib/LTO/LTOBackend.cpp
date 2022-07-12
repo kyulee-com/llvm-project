@@ -290,6 +290,7 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
   }
 
   // Parse a custom pipeline if asked to.
+  errs() <<"start\n";
   if (!Conf.OptPipeline.empty()) {
     if (auto Err = PB.parsePassPipeline(MPM, Conf.OptPipeline)) {
       report_fatal_error(Twine("unable to parse pass pipeline description '") +
@@ -300,6 +301,7 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
   } else if (IsThinLTO) {
     MPM.addPass(PB.buildThinLTODefaultPipeline(OL, ImportSummary));
   } else {
+    errs() <<"kyulee\n";
     MPM.addPass(PB.buildLTODefaultPipeline(OL, ExportSummary));
   }
 

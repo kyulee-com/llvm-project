@@ -76,6 +76,7 @@ InlineAdvisor &ModuleInlinerPass::getAdvisor(const ModuleAnalysisManager &MAM,
 
   auto *IAA = MAM.getCachedResult<InlineAdvisorAnalysis>(M);
   if (!IAA) {
+    errs() <<" No InlineAdvisorAnalysis\n";
     // It should still be possible to run the inliner as a stand-alone module
     // pass, for test scenarios. In that case, we default to the
     // DefaultInlineAdvisor, which doesn't need to keep state between module
@@ -164,8 +165,51 @@ PreservedAnalyses ModuleInlinerPass::run(Module &M,
     for (Instruction &I : instructions(F))
       if (auto *CB = dyn_cast<CallBase>(&I))
         if (Function *Callee = CB->getCalledFunction()) {
-          if (!Callee->isDeclaration())
+          if (!Callee->isDeclaration()) {
+            #if 0
+            if (Callee->hasNLiveUses(1) && Callee->hasLocalLinkage()) {
+              errs() <<"SingleUse\n";
+              if (Callee->getInstructionCount() < 500) {
+                CB->addFnAttr(Attribute::AlwaysInline);
+              } else {
+                errs() <<"Too large singleton\n";
+                continue;
+              }
+            }
+            else if (Callee->hasNLiveUses(2) && Callee->hasLocalLinkage() ) {
+              if (Callee->getInstructionCount() < 9 ) {
+                CB->addFnAttr(Attribute::AlwaysInline);
+              } else {
+                continue;
+              }
+              errs() <<"DoubleUse\n";
+            }
+            else if (Callee->hasNLiveUses(3)  ) {
+              if (Callee->getInstructionCount() < 3 && Callee->hasLocalLinkage()) {
+                CB->addFnAttr(Attribute::AlwaysInline);
+              } else {
+                continue;
+              }
+              errs() <<"DoubleUse\n";
+            }
+            #endif
+            auto BodySize = Callee->getInstructionCount();
+            if (BodySize >= 2) {
+              if(Callee->hasLocalLinkage() && (
+                (Callee->hasNLiveUses(1) && BodySize < 500)
+                || (Callee->hasNLiveUses(2) && BodySize < 9 )
+                || (Callee->hasNLiveUses(3) && BodySize < 3) )) {
+                 errs() <<" LocalCand\n";
+              }
+              else {
+                continue;
+              }
+            } else {
+              // tiny body 1 instruction, just inline it.
+            }
+
             Calls->push({CB, -1});
+          }
           else if (!isa<IntrinsicInst>(I)) {
             using namespace ore;
             setInlineRemark(*CB, "unavailable definition");
@@ -196,7 +240,7 @@ PreservedAnalyses ModuleInlinerPass::run(Module &M,
   // Track the dead functions to delete once finished with inlining calls. We
   // defer deleting these to make it easier to handle the call graph updates.
   SmallVector<Function *, 4> DeadFunctions;
-
+errs() << "inside module inliner\n";
   // Loop forward over all of the calls.
   while (!Calls->empty()) {
     // We expect the calls to typically be batched with sequences of calls that
@@ -231,10 +275,31 @@ PreservedAnalyses ModuleInlinerPass::run(Module &M,
 
       auto Advice = Advisor.getAdvice(*CB, /*OnlyMandatory*/ false);
       // Check whether we want to inline this callsite.
+      /*
       if (!Advice->isInliningRecommended()) {
         Advice->recordUnattemptedInlining();
         continue;
       }
+      */
+
+     {
+       auto BodySize = Callee.getInstructionCount();
+       if (BodySize >= 2) {
+        if (Callee.hasLocalLinkage()) {
+            if ((Callee.hasNLiveUses(1) && BodySize< 500)
+                || (Callee.hasNLiveUses(2) && BodySize < 9)
+                || (Callee.hasNLiveUses(3) && BodySize < 3)) {
+                  errs() <<" Local candidate inline\n";
+            } else {
+              Advice->recordUnattemptedInlining();
+              continue;
+            }
+        } else  {
+          Advice->recordUnattemptedInlining();
+          continue;
+        }
+       } // else. tiny candidate 1, just inline it.
+     }
 
       // Setup the data structure used to plumb customization into the
       // `InlineFunction` routine.

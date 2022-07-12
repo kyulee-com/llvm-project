@@ -54,10 +54,12 @@
 #include "llvm/IR/User.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
+#include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/IPO/ModuleInliner.h"
 #include "llvm/Transforms/Utils/CallPromotionUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -1125,11 +1127,12 @@ ModuleInlinerWrapperPass::ModuleInlinerWrapperPass(InlineParams Params,
   // For PreLinkThinLTO pass, we disable hot-caller heuristic for sample PGO
   // because it makes profile annotation in the backend inaccurate.
   if (MandatoryFirst) {
-    PM.addPass(InlinerPass(/*OnlyMandatory*/ true));
+    //PM.addPass(InlinerPass(/*OnlyMandatory*/ true));
     if (EnablePostSCCAdvisorPrinting)
       PM.addPass(InlineAdvisorAnalysisPrinterPass(dbgs()));
   }
-  PM.addPass(InlinerPass());
+
+  //PM.addPass(InlinerPass());
   if (EnablePostSCCAdvisorPrinting)
     PM.addPass(InlineAdvisorAnalysisPrinterPass(dbgs()));
 }
@@ -1161,6 +1164,20 @@ PreservedAnalyses ModuleInlinerWrapperPass::run(Module &M,
   else
     MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(
         createDevirtSCCRepeatedPass(std::move(PM), MaxDevirtIterations)));
+
+  {
+  auto Level =OptimizationLevel::Oz;
+  InlineParams IP = getInlineParams(Level.getSpeedupLevel(), Level.getSizeLevel());
+  // The inline deferral logic is used to avoid losing some
+  // inlining chance in future. It is helpful in SCC inliner, in which
+  // inlining is processed in bottom-up order.
+  // While in module inliner, the inlining order is a priority-based order
+  // by default. The inline deferral is unnecessary there. So we disable the
+  // inline deferral logic in module inliner.
+  IP.EnableDeferral = false;
+
+  MPM.addPass(ModuleInlinerPass(IP));
+  }
 
   MPM.addPass(std::move(AfterCGMPM));
   MPM.run(M, MAM);

@@ -84,7 +84,19 @@ class SizePriority : public InlinePriority {
 
   static PriorityT evaluate(const CallBase *CB) {
     Function *Callee = CB->getCalledFunction();
-    return Callee->getInstructionCount();
+    unsigned Uses = Callee->getLiveUses();
+    unsigned BodySize = Callee->getInstructionCount();
+    unsigned ArgOverhead = CB->arg_size();
+    unsigned FrameOverhead = CB->arg_size();
+    unsigned BeforeOverhead = (1 + ArgOverhead) * Uses + FrameOverhead + BodySize;
+    unsigned AfterOverhead = Uses * BodySize;
+    unsigned Priority = 0;
+    if (BeforeOverhead >= AfterOverhead) {
+      Priority = 10000 - (BeforeOverhead - AfterOverhead);
+    } else {
+      Priority = 10000 + (AfterOverhead - BeforeOverhead);
+    }
+    return Priority;
   }
 
   static bool isMoreDesirable(const PriorityT &P1, const PriorityT &P2) {

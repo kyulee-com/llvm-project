@@ -742,7 +742,7 @@ static bool constantIsDead(const Constant *C, bool RemoveDeadUsers) {
     ReplaceableMetadataImpl::SalvageDebugInfo(*C);
     const_cast<Constant *>(C)->destroyConstant();
   }
-  
+
   return true;
 }
 
@@ -789,6 +789,17 @@ bool Constant::hasNLiveUses(unsigned N) const {
     }
   }
   return NumUses == N;
+}
+
+unsigned Constant::getLiveUses() const {
+  unsigned NumUses = 0;
+  for (const Use &U : uses()) {
+    const Constant *User = dyn_cast<Constant>(U.getUser());
+    if (!User || !constantIsDead(User, /* RemoveDeadUsers= */ false)) {
+      ++NumUses;
+    }
+  }
+  return NumUses;
 }
 
 Constant *Constant::replaceUndefsWith(Constant *C, Constant *Replacement) {
