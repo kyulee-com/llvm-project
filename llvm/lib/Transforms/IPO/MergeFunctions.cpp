@@ -405,7 +405,13 @@ bool MergeFunctions::doFunctionalCheck(std::vector<WeakTrackingVH> &Worklist) {
 
 /// Check whether \p F is eligible for function merging.
 static bool isEligibleForMerging(Function &F) {
-  return !F.isDeclaration() && !F.hasAvailableExternallyLinkage();
+  if (F.isDeclaration())
+     return false;
+  if (F.hasAvailableExternallyLinkage())
+     return false;
+  if (F.hasFnAttribute(llvm::Attribute::NoMerge))
+    return false;
+  return true;
 }
 
 bool MergeFunctions::runOnModule(Module &M) {
