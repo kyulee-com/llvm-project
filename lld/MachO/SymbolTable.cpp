@@ -152,8 +152,40 @@ Defined *SymbolTable::addDefined(StringRef name, InputFile *file,
     } else if (auto *undef = dyn_cast<Undefined>(s)) {
       // Preserve the original bitcode file name (instead of using the object
       // file name).
-      if (undef->wasBitcodeSymbol)
+      if (undef->wasBitcodeSymbol) {
+        if (file->archiveName != ObjFile::PseudoBitcodeArchiveName) {
+          // The file must be a native object file built from a bitcode file
+          // as we now resolve a pending prevailing symbol that was a bitcode
+          // symbol. Otherwise, this file may be a native library or object file
+          // which is somehow loaded during bitcode compilation, resolving this
+          // pending prevailing symbol with it, as opposed to an object file
+          // built from a bitcode file. A more serious scenario is when symbols
+          // are absent from a bitcode module's (say `A`) symbol table. This can
+          // occur if the bitcode `A` has `module asm' with explicit references
+          // to certain symbols. These symbols are meant to trigger the loading
+          // of a bitcode module (say `B`), which does not occur due to their
+          // absence in `A`'s symbol table. Later, the these missing
+          // symbols surfacing in the resultant object file (for `A`)
+          // preemptively resolves a prevailing symbols that is pending to the
+          // yet-to-be-loaded objet file built from another bitcode module (say
+          // `C`), Such premature resolution leads to an incorrect relocation
+          // for this symbol, as `B` is not even compiled. In short, given `A`,
+          // `B`, and `C` bitcode modules, LTO only compiles `A` and `C` as
+          // there is no explicit symbol reference to `B`. Later, from an
+          // additional symbol (now referencing to `B`) in the resulting object
+          // of `A`, we may resolve eagerly a pending symbol with `B` (that is
+          // not compiled), as opposed to the resulting object of `C` which was
+          // expected.
+          std::string message = "The pending prevailing symbol(" + name.str() +
+                                ") in the bitcode file(" +
+                                toString(undef->getFile()) +
+                                ") is overriden by a native archive, or "
+                                "another bitcode archive: " +
+                                toString(file);
+          error(message);
+        }
         file = undef->getFile();
+      }
     }
     // Defined symbols take priority over other types of symbols, so in case
     // of a name conflict, we fall through to the replaceSymbol() call below.

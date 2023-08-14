@@ -167,6 +167,8 @@ public:
   template <class LP>
   void parseLinkerOptions(llvm::SmallVectorImpl<StringRef> &LinkerOptions);
 
+  // Use this name to track if the object file is built from a bitcode file.
+  static constexpr const char *PseudoBitcodeArchiveName = "<BuiltFromBitcode>";
   static bool classof(const InputFile *f) { return f->kind() == ObjKind; }
 
   std::string sourceFile() const;
