@@ -66,6 +66,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/CodeGenData/CodeGenData.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Mangler.h"
@@ -1126,6 +1127,10 @@ bool MachineOutliner::runOnModule(Module &M) {
   // nothing to outline.
   if (M.empty())
     return false;
+
+  if (cgdata::isWriteCGData()) {
+    errs() << "Write CGData\n";
+  }
 
   // Number to append to the current outlined function.
   unsigned OutlinedFunctionNum = 0;
