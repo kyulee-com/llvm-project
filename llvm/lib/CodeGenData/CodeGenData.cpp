@@ -25,8 +25,44 @@ cl::opt<std::string>
     UseCodeGenDataPath("use-codegen-data-path", cl::init(""), cl::Hidden,
                        cl::desc("Path to where .cgdata file is read"));
 
+namespace {
+
+const char *CodeGenDataSectNameCommon[] = {
+#define CG_DATA_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix)         \
+  SectNameCommon,
+#include "llvm/CodeGenData/CodeGenData.inc"
+};
+
+const char *CodeGenDataSectNameCoff[] = {
+#define CG_DATA_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix)         \
+  SectNameCoff,
+#include "llvm/CodeGenData/CodeGenData.inc"
+};
+
+const char *CodeGenDataSectNamePrefix[] = {
+#define CG_DATA_SECT_ENTRY(Kind, SectNameCommon, SectNameCoff, Prefix) Prefix,
+#include "llvm/CodeGenData/CodeGenData.inc"
+};
+
+} // namespace
+
 namespace llvm {
-namespace cgdata {
+
+std::string getCodeGenDataSectionName(CGDataSectKind CGSK,
+                                      Triple::ObjectFormatType OF,
+                                      bool AddSegmentInfo) {
+  std::string SectName;
+
+  if (OF == Triple::MachO && AddSegmentInfo)
+    SectName = CodeGenDataSectNamePrefix[CGSK];
+
+  if (OF == Triple::COFF)
+    SectName += CodeGenDataSectNameCoff[CGSK];
+  else
+    SectName += CodeGenDataSectNameCommon[CGSK];
+
+  return SectName;
+}
 
 std::unique_ptr<CodeGenData> CodeGenData::instance = nullptr;
 std::once_flag CodeGenData::onceFlag;
@@ -49,16 +85,11 @@ CodeGenData &CodeGenData::getInstance() {
   return *(instance.get());
 }
 
-bool CodeGenData::isWriteCGData() { return emitCGData; }
+bool CodeGenData::shouldWriteCGData() { return emitCGData; }
 
-bool CodeGenData::isReadCGData() {
-  return !emitCGData && !GlobalOutlinedHashTree.get();
+bool CodeGenData::shouldReadCGData() {
+  return !emitCGData && hasGlobalOutlinedHashTree() &&
+         !GlobalOutlinedHashTree.get();
 }
 
-bool isWriteCGData() {
-  auto &CGD = CodeGenData::getInstance();
-  return CGD.isWriteCGData();
-}
-
-} // end namespace cgdata
 } // end namespace llvm
