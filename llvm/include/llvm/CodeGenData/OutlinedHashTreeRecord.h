@@ -1,4 +1,4 @@
-//===- OutlinedHashTreeRecord.h----------------------------------*- C++ -*-===//
+//===- OutlinedHashTreeRecord.h ---------------------------------*- C++ -*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -14,6 +14,7 @@
 #ifndef LLVM_CODEGENDATA_OUTLINEDHASHTREERECORD_H
 #define LLVM_CODEGENDATA_OUTLINEDHASHTREERECORD_H
 
+#include "llvm/CodeGenData/CodeGenData.inc"
 #include "llvm/CodeGenData/OutlinedHashTree.h"
 
 

@@ -11,6 +11,7 @@
 #include "llvm/CodeGenData/OutlinedHashTree.h"
 
 #include <stack>
+#include <tuple>
 
 #define DEBUG_TYPE "outlined-hash-tree"
 
@@ -108,6 +109,37 @@ void OutlinedHashTree::insert(const HashSequencePair &SequencePair) {
     Current = I->second.get();
   }
   Current->Terminals += Count;
+}
+
+void OutlinedHashTree::merge(const OutlinedHashTree *Tree) {
+  HashNode *Dst = getRoot();
+  const HashNode *Src = Tree->getRoot();
+
+  std::stack<std::pair<HashNode *, const HashNode *>> Stack;
+  Stack.push({Dst, Src});
+
+  while (!Stack.empty()) {
+    auto [DstNode, SrcNode] = Stack.top();
+    Stack.pop();
+
+    if (!SrcNode)
+      continue;
+    DstNode->Terminals += SrcNode->Terminals;
+
+    for (auto &[Hash, NextSrcNode] : SrcNode->Successors) {
+      HashNode *NextDstNode;
+      auto I = DstNode->Successors.find(Hash);
+      if (I == DstNode->Successors.end()) {
+        auto NextDst = std::make_unique<HashNode>();
+        NextDstNode = NextDst.get();
+        NextDstNode->Hash = Hash;
+        DstNode->Successors.emplace(Hash, std::move(NextDst));
+      } else
+        NextDstNode = I->second.get();
+
+      Stack.push({NextDstNode, NextSrcNode.get()});
+    }
+  }
 }
 
 unsigned OutlinedHashTree::find(const HashSequence &Sequence) const {

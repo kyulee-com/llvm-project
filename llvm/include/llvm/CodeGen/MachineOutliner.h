@@ -18,6 +18,7 @@
 #include "llvm/CodeGen/LiveRegUnits.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/MachineStableHash.h"
 #include <initializer_list>
 
 namespace llvm {
@@ -233,12 +234,15 @@ public:
   /// Target-defined identifier for constructing a frame for this function.
   unsigned FrameConstructionID = 0;
 
+  /// The sequence of stable_hash'es of instructions.
+  std::vector<stable_hash> OutlinedHashSequence;
+
   /// Return the number of candidates for this \p OutlinedFunction.
-  unsigned getOccurrenceCount() const { return Candidates.size(); }
+  virtual unsigned getOccurrenceCount() const { return Candidates.size(); }
 
   /// Return the number of bytes it would take to outline this
   /// function.
-  unsigned getOutliningCost() const {
+  virtual unsigned getOutliningCost() const {
     unsigned CallOverhead = 0;
     for (const Candidate &C : Candidates)
       CallOverhead += C.getCallOverhead();
@@ -272,7 +276,28 @@ public:
   }
 
   OutlinedFunction() = delete;
+  virtual ~OutlinedFunction() = default;
 };
+
+struct GlobalOutlinedFunction : public OutlinedFunction {
+  GlobalOutlinedFunction(OutlinedFunction OF, unsigned GlobalOccurrenceCount)
+      : OutlinedFunction(OF.Candidates, OF.SequenceSize, OF.FrameOverhead,
+                         OF.FrameConstructionID),
+        GlobalOccurrenceCount(GlobalOccurrenceCount) {}
+
+  unsigned GlobalOccurrenceCount;
+  unsigned getOccurrenceCount() const override { return GlobalOccurrenceCount; }
+
+  unsigned getOutliningCost() const override {
+    unsigned CallOverhead =
+        Candidates[0].getCallOverhead() * getOccurrenceCount();
+    return CallOverhead + SequenceSize + FrameOverhead;
+  }
+
+  GlobalOutlinedFunction() = delete;
+  ~GlobalOutlinedFunction() = default;
+};
+
 } // namespace outliner
 } // namespace llvm
 

@@ -77,8 +77,6 @@ class OutlinedHashTree {
   using HashSequence = std::vector<stable_hash>;
   using HashSequencePair = std::pair<std::vector<stable_hash>, unsigned>;
 
-  OutlinedHashTree() = default;
-
   /// Walks every edge and node in the OutlinedHashTree and calls CallbackEdge
   /// for the edges and CallbackNode for the nodes with the stable_hash for
   /// the source and the stable_hash of the sink for an edge. These generic
@@ -109,9 +107,6 @@ public:
              std::unordered_map<stable_hash, std::string> DebugMap = {}) const;
 
   void dump() const { print(llvm::errs()); }
-
-  /// \returns the matching count if \p Sequence exists in a OutlinedHashTree.
-  unsigned find(const HashSequence &Sequence) const;
 
   /// \returns the size of a OutlinedHashTree by traversing it. If
   /// \p GetTerminalCountOnly is true, it only counts the terminal nodes
@@ -148,6 +143,12 @@ public:
   /// Inserts a \p Sequence into a OutlinedHashTree. The last node in the
   /// sequence will set IsTerminal to true in OutlinedHashTree.
   void insert(const HashSequencePair &SequencePair);
+
+  /// Merge the given Tree into this OutlinedHashTree.
+  void merge(const OutlinedHashTree *Tree);
+
+  /// \returns the matching count if \p Sequence exists in a OutlinedHashTree.
+  unsigned find(const HashSequence &Sequence) const;
 
 private:
   /// OutlinedHashTree is a compact representation of a set of stable_hash
