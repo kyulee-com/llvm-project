@@ -14,6 +14,7 @@
 #ifndef LLVM_CODEGENDATA_CODEGENDATA_H
 #define LLVM_CODEGENDATA_CODEGENDATA_H
 
+#include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/CodeGenData/OutlinedHashTree.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -30,6 +31,13 @@ std::string getCodeGenDataSectionName(CGDataSectKind CGSK,
                                       Triple::ObjectFormatType OF,
                                       bool AddSegmentInfo = true);
 
+enum class CGDataKind {
+  Unknown = 0x0,
+  // A function outlining info.
+  FunctionOutlinedHashTree = 0x1,
+  LLVM_MARK_AS_BITMASK_ENUM(/*LargestValue=*/FunctionOutlinedHashTree)
+};
+
 enum CGDataMode {
   None,
   Read,
@@ -37,13 +45,17 @@ enum CGDataMode {
 };
 
 class CodeGenData {
-  // outlined function info
+  /// Global outlined hash tree that has oulined hash sequences across modules.
   std::unique_ptr<OutlinedHashTree> GlobalOutlinedHashTree;
 
-  // This flag is initialized when -emit-codegen-data is set.
-  // Or, with -ftwo-codegen-rounds,
+  /// This flag is set when -fcgdata-generate (-emit-codegen-data) is passed.
+  /// Or, mutated with -ftwo-codegen-rounds during two codegen runs.
   bool emitCGData;
 
+  /// This is a singleton instance which is thread-safe. Unlike profile data
+  /// which is largely function-based, codegen data describes the whole module.
+  /// Therefore, this can be initialized once, and can be used across modules
+  /// instead of constructing the same one for each codegen backend.
   static std::unique_ptr<CodeGenData> instance;
   static std::once_flag onceFlag;
 
@@ -97,6 +109,7 @@ enum CGDataVersion {
   Version1 = 1,
   CurrentVersion = CG_DATA_INDEX_VERSION
 };
+const uint64_t Version = CGDataVersion::CurrentVersion;
 
 struct Header {
   uint64_t Magic;
