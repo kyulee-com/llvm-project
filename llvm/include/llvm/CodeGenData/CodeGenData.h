@@ -126,11 +126,11 @@ struct Header {
 
   // Returns the size of the header in bytes for all valid fields based on the
   // version. I.e a older version header will return a smaller size.
-  size_t size() const {} // TODO
+  size_t size() const { return 0; } // TODO
 
   // Returns the format version in little endian. The header retains the version
   // in native endian of the compiler runtime.
-  uint64_t formatVersion() const {} // TODO
+  uint64_t formatVersion() const { return 0; } // TODO
 };
 
 } // end namespace IndexedCGData
