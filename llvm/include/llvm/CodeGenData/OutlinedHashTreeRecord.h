@@ -14,9 +14,8 @@
 #ifndef LLVM_CODEGENDATA_OUTLINEDHASHTREERECORD_H
 #define LLVM_CODEGENDATA_OUTLINEDHASHTREERECORD_H
 
-#include "llvm/CodeGenData/CodeGenData.inc"
+#include "llvm/CodeGenData/CodeGenData.h"
 #include "llvm/CodeGenData/OutlinedHashTree.h"
-
 
 namespace llvm {
 
@@ -25,13 +24,23 @@ using IdHashNodeMapTy = std::map<unsigned, HashNode *>;
 using HashNodeIdMapTy = std::unordered_map<const HashNode *, unsigned>;
 
 struct OutlinedHashTreeRecord {
+  /// The outlined hash tree being held for serialization and deserialization.
   OutlinedHashTree *HashTree;
+
+  OutlinedHashTreeRecord() = default;
   OutlinedHashTreeRecord(OutlinedHashTree *HashTree) : HashTree(HashTree){};
 
   void serialize(raw_ostream &OS) const;
   void deserialize(MemoryBufferRef Buffer);
   void serializeYAML(raw_ostream &OS) const;
   void deserializeYAML(MemoryBufferRef Buffer);
+
+  /// Merge the other outlined hash tree into this one.
+  void merge(const OutlinedHashTreeRecord &Other) {
+    HashTree->merge(Other.HashTree);
+  }
+
+  bool empty() { return !HashTree || HashTree->empty(); }
 
 private:
   /// Convert HashTree to stable data.

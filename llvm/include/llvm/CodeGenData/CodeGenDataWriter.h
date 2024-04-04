@@ -30,6 +30,8 @@ class CodeGenDataWriter {
   CGDataKind Kind = CGDataKind::Unknown;
 
 public:
+  CodeGenDataWriter() = default;
+  ~CodeGenDataWriter() = default;
 
   /// Add the outlined hash tree record.
   void addRecord(const OutlinedHashTreeRecord Record);
