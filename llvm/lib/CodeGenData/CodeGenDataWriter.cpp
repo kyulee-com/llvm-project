@@ -1,4 +1,4 @@
-//=-- CodeGenDataWriter.cpp - Codegen Data ---------------------------------=//
+//===-- CodeGenDataWriter.cpp - Codegen Data ------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -106,20 +106,22 @@ Error CodeGenDataWriter::writeHeader(CGDataOStream &COS) {
   Header.Magic = IndexedCGData::Magic;
   Header.Version = IndexedCGData::Version;
 
-  // Set the CGDataType depending on the kind.
-  if (static_cast<bool>(Kind & CGDataKind::FunctionOutlinedHashTree))
-    Header.CGDataType |= static_cast<uint32_t>(CGDataKind::FunctionOutlinedHashTree);
+  // Set the CGDataKind depending on the kind.
+  if (static_cast<bool>(DataKind & CGDataKind::FunctionOutlinedHashTree))
+    Header.DataKind |=
+        static_cast<uint32_t>(CGDataKind::FunctionOutlinedHashTree);
 
   Header.OutlinedHashTreeOffset = 0;
 
-  // Only write out up to the CGDataType. We need to remember the offest of the
+  // Only write out up to the CGDataKind. We need to remember the offest of the
   // remaing fields to allow back patching later.
   COS.write(Header.Magic);
   COS.write32(Header.Version);
-  COS.write32(Header.CGDataType);
+  COS.write32(Header.DataKind);
 
   // Save the location of Header.OutlinedHashTreeOffset field in \c COS.
   OutlinedHashTreeOffset = COS.tell();
+  errs() << "OutlinedHashTreeOffset: " << OutlinedHashTreeOffset << "\n";
 
   // Reserve the space for OutlinedHashTreeOffset field.
   COS.write(0);
@@ -132,11 +134,13 @@ Error CodeGenDataWriter::writeImpl(CGDataOStream &COS) {
     return E;
 
   uint64_t OutlinedHashTreeFieldStart = COS.tell();
+  errs() << "OutlinedHashTreeFieldStart: " << OutlinedHashTreeFieldStart
+         << "\n";
   HashTreeRecord.serialize(COS.OS);
 
   // Back patch the offsets.
   CGDataPatchItem PatchItems[] = {
-        {OutlinedHashTreeFieldStart, &OutlinedHashTreeOffset, 1}};
+      {OutlinedHashTreeOffset, &OutlinedHashTreeFieldStart, 1}};
   COS.patch(PatchItems);
 
   return Error::success();

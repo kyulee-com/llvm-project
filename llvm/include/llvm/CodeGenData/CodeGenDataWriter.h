@@ -27,7 +27,7 @@ class CodeGenDataWriter {
   OutlinedHashTreeRecord HashTreeRecord;
 
   // An enum describing the attributes of the cg data.
-  CGDataKind Kind = CGDataKind::Unknown;
+  CGDataKind DataKind = CGDataKind::Unknown;
 
 public:
   CodeGenDataWriter() = default;
@@ -50,17 +50,17 @@ public:
   Error mergeCGDataKind(const CGDataKind Other) {
     // If the kind is unset, this is the first CGData we are merging so just
     // set it to the given type.
-    if (Kind == CGDataKind::Unknown) {
-      Kind = Other;
+    if (DataKind == CGDataKind::Unknown) {
+      DataKind = Other;
       return Error::success();
     }
 
     // Now we update the CGData type with the bits that are set.
-    Kind |= Other;
+    DataKind |= Other;
     return Error::success();
   }
 
-  CGDataKind getCGDataKind() const { return Kind; }
+  CGDataKind getCGDataKind() const { return DataKind; }
 
 private:
   uint64_t OutlinedHashTreeOffset;

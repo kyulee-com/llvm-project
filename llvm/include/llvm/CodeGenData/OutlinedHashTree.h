@@ -137,8 +137,8 @@ public:
     return Size;
   }
 
-  const HashNode *getRoot() const { return &Root; }
-  HashNode *getRoot() { return &Root; }
+  const HashNode *getRoot() const { return Root.get(); }
+  HashNode *getRoot() { return Root.get(); }
 
   /// Inserts a \p Sequence into a OutlinedHashTree. The last node in the
   /// sequence will set IsTerminal to true in OutlinedHashTree.
@@ -150,13 +150,21 @@ public:
   /// \returns the matching count if \p Sequence exists in a OutlinedHashTree.
   unsigned find(const HashSequence &Sequence) const;
 
-private:
+  // private:
   /// OutlinedHashTree is a compact representation of a set of stable_hash
   /// sequences. It allows for for efficient walking of these sequences for
-  /// matching purposes. HashTreeImpl is the root node of this tree. Its Hash
-  /// value is 0, and its Successors are the beginning of StableHashSequences
-  /// inserted into the OutlinedHashTree.
-  HashNode Root;
+  /// matching purposes. The hash of this root node is 0. Its Successors are
+  /// the beginning of StableHashSequence inserted into the OutlinedHashTree.
+  // HashNode Root;
+  OutlinedHashTree() { Root = std::make_unique<HashNode>(); }
+#if 0
+  /// Move constructor
+  OutlinedHashTree(OutlinedHashTree&& Other) noexcept
+    : Root(std::move(Other.Root)) {
+      llvm::errs() <<"moving \n";
+  }
+#endif
+  std::unique_ptr<HashNode> Root;
 };
 
 } // namespace llvm

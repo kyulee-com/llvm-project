@@ -5,10 +5,10 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-/// \file
-///
-/// Defines an IR pass for CodeGen Prepare.
-///
+//
+// This file contains support for codegen data that has stable summary which
+// can be used to optimize the code in the subsequent codegen.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_CODEGENDATA_CODEGENDATA_H
@@ -16,8 +16,9 @@
 
 #include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/CodeGenData/OutlinedHashTree.h"
+//#include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/TargetParser/Triple.h"
-
 #include <mutex>
 
 namespace llvm {
@@ -38,6 +39,62 @@ enum class CGDataKind {
   LLVM_MARK_AS_BITMASK_ENUM(/*LargestValue=*/FunctionOutlinedHashTree)
 };
 
+const std::error_category &cgdata_category();
+
+enum class cgdata_error {
+  success = 0,
+  eof,
+  bad_magic,
+  bad_header,
+  unsupported_version,
+  too_large,
+  truncated,
+  malformed,
+};
+
+inline std::error_code make_error_code(cgdata_error E) {
+  return std::error_code(static_cast<int>(E), cgdata_category());
+}
+
+class CGDataError : public ErrorInfo<CGDataError> {
+public:
+  CGDataError(cgdata_error Err, const Twine &ErrStr = Twine())
+      : Err(Err), Msg(ErrStr.str()) {
+    assert(Err != cgdata_error::success && "Not an error");
+  }
+
+  std::string message() const override;
+
+  void log(raw_ostream &OS) const override { OS << message(); }
+
+  std::error_code convertToErrorCode() const override {
+    return make_error_code(Err);
+  }
+
+  cgdata_error get() const { return Err; }
+  const std::string &getMessage() const { return Msg; }
+
+  /// Consume an Error and return the raw enum value contained within it, and
+  /// the optional error message. The Error must either be a success value, or
+  /// contain a single CGDataError.
+  static std::pair<cgdata_error, std::string> take(Error E) {
+    auto Err = cgdata_error::success;
+    std::string Msg = "";
+    handleAllErrors(std::move(E), [&Err, &Msg](const CGDataError &IPE) {
+      assert(Err == cgdata_error::success && "Multiple errors encountered");
+      Err = IPE.get();
+      Msg = IPE.getMessage();
+    });
+    return {Err, Msg};
+  }
+
+  static char ID;
+
+private:
+  cgdata_error Err;
+  std::string Msg;
+};
+
 enum CGDataMode {
   None,
   Read,
@@ -46,18 +103,18 @@ enum CGDataMode {
 
 class CodeGenData {
   /// Global outlined hash tree that has oulined hash sequences across modules.
-  std::unique_ptr<OutlinedHashTree> GlobalOutlinedHashTree;
+  std::unique_ptr<OutlinedHashTree> PublishedHashTree;
 
-  /// This flag is set when -fcgdata-generate (-emit-codegen-data) is passed.
-  /// Or, mutated with -ftwo-codegen-rounds during two codegen runs.
-  bool emitCGData;
+  /// This flag is set when -fcgdata-generate is passed.
+  /// Or, it can be mutated with -ftwo-codegen-rounds during two codegen runs.
+  bool EmitCGData;
 
   /// This is a singleton instance which is thread-safe. Unlike profile data
   /// which is largely function-based, codegen data describes the whole module.
   /// Therefore, this can be initialized once, and can be used across modules
   /// instead of constructing the same one for each codegen backend.
-  static std::unique_ptr<CodeGenData> instance;
-  static std::once_flag onceFlag;
+  static std::unique_ptr<CodeGenData> Instance;
+  static std::once_flag OnceFlag;
 
   CodeGenData() = default;
 
@@ -66,23 +123,37 @@ public:
 
   static CodeGenData &getInstance();
 
-  bool hasGlobalOutlinedHashTree() { return !GlobalOutlinedHashTree; }
-
-  OutlinedHashTree *getGlobalOutlinedHashTree() {
-    return GlobalOutlinedHashTree.get();
+  /// Returns true if we have a valid outlined hash tree.
+  bool hasOutlinedHashTree() {
+    return PublishedHashTree && !PublishedHashTree->empty();
   }
 
-  bool shouldWriteCGData();
+  /// Returns the outlined hash tree. This can be globally used in a read-only
+  /// manner.
+  const OutlinedHashTree *getOutlinedHashTree() {
+    return PublishedHashTree.get();
+  }
 
-  bool shouldReadCGData();
+  /// Returns true if we should write codegen data.
+  bool shouldWriteCGData() { return EmitCGData; }
 
-  void publishOutlinedHashTree();
+  /// Returns true if we have a valid codegen data to read.
+  bool shouldReadCGData() { return !EmitCGData && hasOutlinedHashTree(); }
+
+  /// Publish the (globally) merged or read outlined hash tree.
+  void publishOutlinedHashTree(std::unique_ptr<OutlinedHashTree> HashTree) {
+    PublishedHashTree = std::move(HashTree);
+  }
 };
 
 namespace cgdata {
 
-inline bool hasGlobalOutlinedHashTree() {
-  return CodeGenData::getInstance().hasGlobalOutlinedHashTree();
+inline bool hasOutlinedHashTree() {
+  return CodeGenData::getInstance().hasOutlinedHashTree();
+}
+
+inline const OutlinedHashTree *getOutlinedHashTree() {
+  return CodeGenData::getInstance().getOutlinedHashTree();
 }
 
 inline bool shouldWriteCGData() {
@@ -93,9 +164,8 @@ inline bool shouldReadCGData() {
   return CodeGenData::getInstance().shouldReadCGData();
 }
 
-inline OutlinedHashTree *getGlobalOutlinedHashTree() {
-  return CodeGenData::getInstance().getGlobalOutlinedHashTree();
-}
+void warn(Error E, StringRef Whence = "");
+void warn(Twine Message, std::string Whence = "", std::string Hint = "");
 
 } // end namespace cgdata
 
@@ -114,7 +184,7 @@ const uint64_t Version = CGDataVersion::CurrentVersion;
 struct Header {
   uint64_t Magic;
   uint32_t Version;
-  uint32_t CGDataType;
+  uint32_t DataKind;
   uint64_t OutlinedHashTreeOffset;
 
   // New fields should only be added at the end to ensure that the size
@@ -122,15 +192,7 @@ struct Header {
   // the new field is read correctly.
 
   // Reads a header struct from the buffer.
-  static Expected<Header> readFromBuffer(const unsigned char *Buffer) {} // TODO
-
-  // Returns the size of the header in bytes for all valid fields based on the
-  // version. I.e a older version header will return a smaller size.
-  size_t size() const { return 0; } // TODO
-
-  // Returns the format version in little endian. The header retains the version
-  // in native endian of the compiler runtime.
-  uint64_t formatVersion() const { return 0; } // TODO
+  static Expected<Header> readFromBuffer(const unsigned char *Curr);
 };
 
 } // end namespace IndexedCGData

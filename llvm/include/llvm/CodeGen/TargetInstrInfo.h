@@ -2055,9 +2055,16 @@ public:
   /// information for a set of outlining candidates. Returns std::nullopt if the
   /// candidates are not suitable for outlining.
   virtual std::optional<outliner::OutlinedFunction> getOutliningCandidateInfo(
-      std::vector<outliner::Candidate> &RepeatedSequenceLocs) const {
+      std::vector<outliner::Candidate> &RepeatedSequenceLocs,
+      bool AllowSingleCand) const {
     llvm_unreachable(
         "Target didn't implement TargetInstrInfo::getOutliningCandidateInfo!");
+  }
+
+  virtual std::optional<outliner::OutlinedFunction> getOutliningCandidateInfo(
+      std::vector<outliner::Candidate> &RepeatedSequenceLocs) const {
+    return getOutliningCandidateInfo(RepeatedSequenceLocs,
+                                     /*AllowSingleCand*/ false);
   }
 
   /// Optional target hook to create the LLVM IR attributes for the outlined

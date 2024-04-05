@@ -1256,25 +1256,19 @@ static void gatherInputSections() {
 static void codegenDataGenerate() {
   TimeTraceScope timeScope("Generating codegen data");
 
-  OutlinedHashTree outlinerHashTree;
-  OutlinedHashTreeRecord outlinerRecord(&outlinerHashTree);
+  OutlinedHashTree outlinedHashTree;
+  OutlinedHashTreeRecord outlinerRecord(&outlinedHashTree);
 
   for (ConcatInputSection *isec : inputSections) {
     if (isec->getSegName() == segment_names::data &&
         isec->getName() == section_names::outlinedHashTree) {
-      // Read contents from the section
-      StringRef contents(reinterpret_cast<const char *>(isec->data.data()),
-                         isec->data.size());
-      std::unique_ptr<MemoryBuffer> outlinerBuffer =
-          MemoryBuffer::getMemBuffer(contents, "outlined hash tree", false);
-
-      // Build a local outlined hash tree
-      OutlinedHashTree localOutlinerHashTree;
-      OutlinedHashTreeRecord localOutlinerRecord(&localOutlinerHashTree);
-      localOutlinerRecord.deserialize(outlinerBuffer->getMemBufferRef());
+      // Read outlined hash tree from each section
+      OutlinedHashTree localTree;
+      OutlinedHashTreeRecord localRecord(&localTree);
+      localRecord.deserialize(isec->data.data());
 
       // Merge it to the global hash tree.
-      outlinerRecord.merge(localOutlinerRecord);
+      outlinerRecord.merge(localRecord);
     }
   }
 
