@@ -31,7 +31,7 @@ struct OutlinedHashTreeRecord {
   OutlinedHashTreeRecord(OutlinedHashTree *HashTree) : HashTree(HashTree){};
 
   void serialize(raw_ostream &OS) const;
-  void deserialize(MemoryBufferRef Buffer);
+  void deserialize(const unsigned char *Ptr);
   void serializeYAML(raw_ostream &OS) const;
   void deserializeYAML(MemoryBufferRef Buffer);
 

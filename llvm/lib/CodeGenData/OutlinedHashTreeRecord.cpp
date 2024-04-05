@@ -1,4 +1,4 @@
-//===---- OutlinedHashTreeRecord.cpp ----------------------------*- C++ -*-===//
+//===-- OutlinedHashTreeRecord.cpp ----------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -55,6 +55,7 @@ void OutlinedHashTreeRecord::serialize(raw_ostream &OS) const {
   IdHashNodeStableMapTy IdNodeStableMap;
   convertToStableData(IdNodeStableMap);
 
+  errs() << "IdNodeStableMapTy size: " << IdNodeStableMap.size() << "\n";
   support::endian::Writer Writer(OS, endianness::little);
   Writer.write<uint32_t>(IdNodeStableMap.size());
   for (const auto &[Id, NodeStable] : IdNodeStableMap) {
@@ -67,24 +68,23 @@ void OutlinedHashTreeRecord::serialize(raw_ostream &OS) const {
   }
 }
 
-void OutlinedHashTreeRecord::deserialize(MemoryBufferRef Buffer) {
+void OutlinedHashTreeRecord::deserialize(const unsigned char *Ptr) {
   IdHashNodeStableMapTy IdNodeStableMap;
 
-  const char *Data = Buffer.getBufferStart();
   auto NumIdNodeStableMap =
-      endian::readNext<uint32_t, endianness::little, unaligned>(Data);
+      endian::readNext<uint32_t, endianness::little, unaligned>(Ptr);
   for (unsigned I = 0; I < NumIdNodeStableMap; ++I) {
-    auto Id = endian::readNext<uint32_t, endianness::little, unaligned>(Data);
+    auto Id = endian::readNext<uint32_t, endianness::little, unaligned>(Ptr);
     HashNodeStable NodeStable;
     NodeStable.Hash =
-        endian::readNext<uint64_t, endianness::little, unaligned>(Data);
+        endian::readNext<uint64_t, endianness::little, unaligned>(Ptr);
     NodeStable.Terminals =
-        endian::readNext<uint32_t, endianness::little, unaligned>(Data);
+        endian::readNext<uint32_t, endianness::little, unaligned>(Ptr);
     auto NumSuccessorIds =
-        endian::readNext<uint32_t, endianness::little, unaligned>(Data);
+        endian::readNext<uint32_t, endianness::little, unaligned>(Ptr);
     for (unsigned J = 0; J < NumSuccessorIds; ++J)
       NodeStable.SuccessorIds.push_back(
-          endian::readNext<uint32_t, endianness::little, unaligned>(Data));
+          endian::readNext<uint32_t, endianness::little, unaligned>(Ptr));
 
     IdNodeStableMap[Id] = std::move(NodeStable);
   }

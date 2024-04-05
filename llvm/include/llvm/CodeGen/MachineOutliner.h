@@ -280,7 +280,7 @@ public:
 };
 
 struct GlobalOutlinedFunction : public OutlinedFunction {
-  GlobalOutlinedFunction(OutlinedFunction OF, unsigned GlobalOccurrenceCount)
+  GlobalOutlinedFunction(OutlinedFunction &OF, unsigned GlobalOccurrenceCount)
       : OutlinedFunction(OF.Candidates, OF.SequenceSize, OF.FrameOverhead,
                          OF.FrameConstructionID),
         GlobalOccurrenceCount(GlobalOccurrenceCount) {}

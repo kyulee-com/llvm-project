@@ -19,6 +19,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StableHashing.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/ilist_iterator.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -94,9 +95,19 @@ stable_hash llvm::stableHashValue(const MachineOperand &MO) {
   case MachineOperand::MO_Metadata:
     StableHashBailingMetadataUnsupported++;
     return 0;
-  case MachineOperand::MO_GlobalAddress:
-    StableHashBailingGlobalAddress++;
-    return 0;
+  case MachineOperand::MO_GlobalAddress: {
+    const GlobalValue *GV = MO.getGlobal();
+    if (GV->hasPrivateLinkage() || !GV->hasName()) {
+      StableHashBailingGlobalAddress++;
+      return 0;
+    }
+    auto Name = GV->getName();
+    // TODO: When the name encodes the target contents, we could use it
+    // to make more precise hash.
+    return stable_hash_combine(MO.getType(), MO.getTargetFlags(),
+                               stable_hash_combine_string(Name),
+                               MO.getOffset());
+  }
   case MachineOperand::MO_TargetIndex: {
     if (const char *Name = MO.getTargetIndexName())
       return stable_hash_combine(MO.getType(), MO.getTargetFlags(),
