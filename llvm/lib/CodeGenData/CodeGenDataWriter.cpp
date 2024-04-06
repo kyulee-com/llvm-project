@@ -121,7 +121,6 @@ Error CodeGenDataWriter::writeHeader(CGDataOStream &COS) {
 
   // Save the location of Header.OutlinedHashTreeOffset field in \c COS.
   OutlinedHashTreeOffset = COS.tell();
-  errs() << "OutlinedHashTreeOffset: " << OutlinedHashTreeOffset << "\n";
 
   // Reserve the space for OutlinedHashTreeOffset field.
   COS.write(0);
@@ -134,8 +133,6 @@ Error CodeGenDataWriter::writeImpl(CGDataOStream &COS) {
     return E;
 
   uint64_t OutlinedHashTreeFieldStart = COS.tell();
-  errs() << "OutlinedHashTreeFieldStart: " << OutlinedHashTreeFieldStart
-         << "\n";
   HashTreeRecord.serialize(COS.OS);
 
   // Back patch the offsets.

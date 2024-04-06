@@ -2752,6 +2752,16 @@ void tools::addMachineOutlinerArgs(const Driver &D,
       addArg(Twine("-enable-machine-outliner=never"));
     }
   }
+
+  // For codegen data gen, the output file is passed to the linker
+  // while a boolean flag is passed to the LLVM backend.
+  // For codegen data use, the input file is passed to the LLVM backend.
+  if (Arg *A = Args.getLastArg(options::OPT_fcodegen_data_generate_EQ))
+    addArg(Twine("-codegen-data-generate"));
+  else if (Arg *A = Args.getLastArg(options::OPT_fcodegen_data_use_EQ)) {
+    SmallString<128> Path(A->getValue());
+    addArg(Twine("-codegen-data-use-path=" + Path.str()));
+  }
 }
 
 void tools::addOpenMPDeviceRTL(const Driver &D,

@@ -476,6 +476,13 @@ void darwin::Linker::AddLinkArgs(Compilation &C, const ArgList &Args,
         llvm::sys::path::append(Path, "default.profdata");
       CmdArgs.push_back(Args.MakeArgString(Twine("--cs-profile-path=") + Path));
     }
+
+    if (auto *CGDataGenerateArg =
+            Args.getLastArg(options::OPT_fcodegen_data_generate_EQ)) {
+      SmallString<128> Path(CGDataGenerateArg->getValue());
+      CmdArgs.push_back(
+          Args.MakeArgString(Twine("--codegen-data-generate-path=") + Path));
+    }
   }
 }
 
@@ -632,6 +639,17 @@ void darwin::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   // independently of -moutline.
   CmdArgs.push_back("-mllvm");
   CmdArgs.push_back("-enable-linkonceodr-outlining");
+
+  // Propagate codegen data flags to the linker for the LTO backend.
+  if (auto *A = Args.getLastArg(options::OPT_fcodegen_data_generate_EQ)) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-codegen-data-generate");
+  } else if (auto *A = Args.getLastArg(options::OPT_fcodegen_data_use_EQ)) {
+    SmallString<128> Path(A->getValue());
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(
+        Args.MakeArgString("-codegen-data-use-path=" + Path.str()));
+  }
 
   // Setup statistics file output.
   SmallString<128> StatsFile =

@@ -55,7 +55,6 @@ void OutlinedHashTreeRecord::serialize(raw_ostream &OS) const {
   IdHashNodeStableMapTy IdNodeStableMap;
   convertToStableData(IdNodeStableMap);
 
-  errs() << "IdNodeStableMapTy size: " << IdNodeStableMap.size() << "\n";
   support::endian::Writer Writer(OS, endianness::little);
   Writer.write<uint32_t>(IdNodeStableMap.size());
   for (const auto &[Id, NodeStable] : IdNodeStableMap) {
