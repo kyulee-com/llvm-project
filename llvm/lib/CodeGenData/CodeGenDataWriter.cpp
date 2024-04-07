@@ -133,7 +133,8 @@ Error CodeGenDataWriter::writeImpl(CGDataOStream &COS) {
     return E;
 
   uint64_t OutlinedHashTreeFieldStart = COS.tell();
-  HashTreeRecord.serialize(COS.OS);
+  if (hasOutlinedHashTree())
+    HashTreeRecord.serialize(COS.OS);
 
   // Back patch the offsets.
   CGDataPatchItem PatchItems[] = {

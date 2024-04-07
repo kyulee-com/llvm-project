@@ -135,10 +135,7 @@ public:
   }
 
   /// Returns true if we should write codegen data.
-  bool shouldWriteCGData() { return EmitCGData; }
-
-  /// Returns true if we have a valid codegen data to read.
-  bool shouldReadCGData() { return !EmitCGData && hasOutlinedHashTree(); }
+  bool emitCGData() { return EmitCGData; }
 
   /// Publish the (globally) merged or read outlined hash tree.
   void publishOutlinedHashTree(std::unique_ptr<OutlinedHashTree> HashTree) {
@@ -156,13 +153,7 @@ inline const OutlinedHashTree *getOutlinedHashTree() {
   return CodeGenData::getInstance().getOutlinedHashTree();
 }
 
-inline bool shouldWriteCGData() {
-  return CodeGenData::getInstance().shouldWriteCGData();
-}
-
-inline bool shouldReadCGData() {
-  return CodeGenData::getInstance().shouldReadCGData();
-}
+inline bool emitCGData() { return CodeGenData::getInstance().emitCGData(); }
 
 void warn(Error E, StringRef Whence = "");
 void warn(Twine Message, std::string Whence = "", std::string Hint = "");

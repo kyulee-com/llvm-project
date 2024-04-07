@@ -2056,15 +2056,14 @@ public:
   /// candidates are not suitable for outlining.
   virtual std::optional<outliner::OutlinedFunction> getOutliningCandidateInfo(
       std::vector<outliner::Candidate> &RepeatedSequenceLocs,
-      bool AllowSingleCand) const {
+      unsigned MipRep) const {
     llvm_unreachable(
         "Target didn't implement TargetInstrInfo::getOutliningCandidateInfo!");
   }
 
   virtual std::optional<outliner::OutlinedFunction> getOutliningCandidateInfo(
       std::vector<outliner::Candidate> &RepeatedSequenceLocs) const {
-    return getOutliningCandidateInfo(RepeatedSequenceLocs,
-                                     /*AllowSingleCand*/ false);
+    return getOutliningCandidateInfo(RepeatedSequenceLocs, /*MipRep*/ 2);
   }
 
   /// Optional target hook to create the LLVM IR attributes for the outlined

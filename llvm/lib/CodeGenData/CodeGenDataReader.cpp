@@ -44,8 +44,7 @@ Error IndexedCodeGenDataReader::read() {
     return HeaderOr.takeError();
 
   Header = HeaderOr.get();
-  if (Header.DataKind &
-      static_cast<uint32_t>(CGDataKind::FunctionOutlinedHashTree)) {
+  if (hasOutlinedHashTree()) {
     const unsigned char *Ptr = Start + Header.OutlinedHashTreeOffset;
     auto Tree = std::make_unique<OutlinedHashTree>();
     OutlinedHashTreeRecord Record(Tree.get());

@@ -711,11 +711,11 @@ void MachineOutliner::findGlobalCandidates(
                 FunctionList.size(), MBBFlagsMap[MBB]);
     CandidatesForRepeatedSeq.push_back(C);
     const TargetInstrInfo *TII = C.getMF()->getSubtarget().getInstrInfo();
-    std::optional<OutlinedFunction> OF = TII->getOutliningCandidateInfo(
-        CandidatesForRepeatedSeq, /*AllowSingleCand*/ true);
+    std::optional<OutlinedFunction> OF =
+        TII->getOutliningCandidateInfo(CandidatesForRepeatedSeq, /*MinRep*/ 1);
     if (!OF || OF->Candidates.empty())
       continue;
-    // We creat a candidate each match.
+    // We create a global candidate each match.
     assert(OF->Candidates.size() == 1);
 
     FunctionList.push_back(
@@ -827,7 +827,6 @@ void MachineOutliner::findCandidates(
       continue;
     }
 
-    // FunctionList.push_back(*OF);
     FunctionList.push_back(std::make_unique<OutlinedFunction>(*OF));
   }
 
@@ -1286,9 +1285,13 @@ void MachineOutliner::initializeOutlinerMode() {
   if (DisableGlobalOutlining)
     return;
 
-  if (cgdata::shouldWriteCGData())
+  // When codegen data write is enabled, we want to write local outlined
+  // hash tree to a custom section, `__llvm_outline`.
+  // When the outlined hash tree is available from the previous codegen data,
+  // we want to read it to optimistically create outlining candidates.
+  if (cgdata::emitCGData())
     OutlinerMode = CGDataMode::Write;
-  else if (cgdata::shouldReadCGData())
+  else if (cgdata::hasOutlinedHashTree())
     OutlinerMode = CGDataMode::Read;
 }
 

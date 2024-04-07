@@ -60,7 +60,14 @@ public:
     return Error::success();
   }
 
+  /// Return the attributes of the current CGData.
   CGDataKind getCGDataKind() const { return DataKind; }
+
+  /// Return true if the header indicates the data has an outlined hash tree.
+  bool hasOutlinedHashTree() const {
+    return static_cast<uint32_t>(DataKind) &
+           static_cast<uint32_t>(CGDataKind::FunctionOutlinedHashTree);
+  }
 
 private:
   uint64_t OutlinedHashTreeOffset;

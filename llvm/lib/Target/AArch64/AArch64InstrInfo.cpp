@@ -8241,7 +8241,7 @@ static bool outliningCandidatesV8_3OpsConsensus(const outliner::Candidate &a,
 std::optional<outliner::OutlinedFunction>
 AArch64InstrInfo::getOutliningCandidateInfo(
     std::vector<outliner::Candidate> &RepeatedSequenceLocs,
-    bool AllowSingleCand) const {
+    unsigned MinRep) const {
   outliner::Candidate &FirstCand = RepeatedSequenceLocs[0];
 
   unsigned SequenceSize = 0;
@@ -8356,7 +8356,7 @@ AArch64InstrInfo::getOutliningCandidateInfo(
 
     // If the sequence doesn't have enough candidates left, then we're done.
     auto Size = RepeatedSequenceLocs.size();
-    if (Size == 0 || (!AllowSingleCand && Size < 2))
+    if (Size < MinRep)
       return std::nullopt;
   }
 
@@ -8601,7 +8601,7 @@ AArch64InstrInfo::getOutliningCandidateInfo(
 
     // If we dropped all of the candidates, bail out here.
     auto Size = RepeatedSequenceLocs.size();
-    if (Size == 0 || (!AllowSingleCand && Size < 2)) {
+    if (Size < MinRep) {
       return std::nullopt;
     }
   }

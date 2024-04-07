@@ -142,7 +142,10 @@ CodeGenData &CodeGenData::getInstance() {
     if (CodeGenDataGenerate)
       CGD->EmitCGData = true;
     else if (!CodeGenDataUsePath.empty()) {
-      // Initialize outlined hash tree if the input file name is given
+      // Initialize outlined hash tree if the input file name is given.
+      // We do not error-out when failing to parse the input file.
+      // Instead, just emit an warning message and fall back as if no CGData
+      // were avaiable.
       auto ReaderOrErr = IndexedCodeGenDataReader::create(CodeGenDataUsePath);
       if (Error E = ReaderOrErr.takeError()) {
         warn(std::move(E), CodeGenDataUsePath);
