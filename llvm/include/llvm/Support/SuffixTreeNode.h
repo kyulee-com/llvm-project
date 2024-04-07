@@ -47,6 +47,18 @@ private:
   unsigned ConcatLen = 0;
 
 public:
+  /// These two indices give a range of indices for its leaf descendants.
+  /// Imagine drawing a tree on paper and assigning a unique index to each leaf
+  /// node in monotonically increasing order from left to right. This way of
+  /// numbering the leaf nodes allows us to associate a continuous range of
+  /// indices with each internal node. For example, if a node has leaf
+  /// descendants with indices i, i+1, ..., j, then its leftLeafIndex is i and
+  /// its rightLeafIndex is j. Note that these indices are for the LeafNodes in
+  /// the SuffixTree Class, which is constructed using post-order depth-first
+  /// traversal.
+  unsigned LeftLeafIndex = EmptyIdx;
+  unsigned RightLeafIndex = EmptyIdx;
+
   // LLVM RTTI boilerplate.
   NodeKind getKind() const { return Kind; }
 

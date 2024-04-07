@@ -10,10 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+//#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/SuffixTree.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/SuffixTreeNode.h"
+#include <stack>
 
 using namespace llvm;
 
@@ -26,7 +29,9 @@ static size_t numElementsInSubstring(const SuffixTreeNode *N) {
   return N->getEndIdx() - N->getStartIdx() + 1;
 }
 
-SuffixTree::SuffixTree(const ArrayRef<unsigned> &Str) : Str(Str) {
+SuffixTree::SuffixTree(const ArrayRef<unsigned> &Str,
+                       bool ConsiderLeafDescendants)
+    : Str(Str), ConsiderLeafDescendants(ConsiderLeafDescendants) {
   Root = insertRoot();
   Active.Node = Root;
 
@@ -46,6 +51,8 @@ SuffixTree::SuffixTree(const ArrayRef<unsigned> &Str) : Str(Str) {
   // Set the suffix indices of each leaf.
   assert(Root && "Root node can't be nullptr!");
   setSuffixIndices();
+  if (ConsiderLeafDescendants)
+    setLeafNodes();
 }
 
 SuffixTreeNode *SuffixTree::insertLeaf(SuffixTreeInternalNode &Parent,
@@ -102,6 +109,69 @@ void SuffixTree::setSuffixIndices() {
     // No children, so we are at the end of the string.
     if (auto *LeafNode = dyn_cast<SuffixTreeLeafNode>(CurrNode))
       LeafNode->setSuffixIdx(Str.size() - CurrNodeLen);
+  }
+}
+
+void SuffixTree::setLeafNodes() {
+  // a stack that keeps track of nodes to visit for post-order DFS traversal.
+  std::stack<SuffixTreeInternalNode *> ToVisit;
+  ToVisit.push(Root);
+
+  // this keeps track of the index of the next leaf node to be added to
+  // the LeafNodes vector of the suffix tree.
+  unsigned LeafCounter = 0;
+
+  // This keeps track of nodes whose children have been added to the stack
+  // during the post-order depth-first traversal of the tree.
+  llvm::SmallPtrSet<SuffixTreeInternalNode *, 32> ChildrenAddedToStack;
+
+  // Traverse the tree in post-order.
+  while (!ToVisit.empty()) {
+    SuffixTreeInternalNode *CurrNode = ToVisit.top();
+    ToVisit.pop();
+    if (ChildrenAddedToStack.find(CurrNode) != ChildrenAddedToStack.end()) {
+      // If the children of the current node has been added to the stack,
+      // then this is the second time we visit this node and at this point,
+      // all of its children have already been processed. Now, we can
+      // set its LeftLeafIndex and RightLeafIndex;
+      assert(!dyn_cast<SuffixTreeLeafNode>(CurrNode) &&
+             "Leaf nodes should not been added to ChildrenAddedToStack!");
+      auto it = CurrNode->Children.begin();
+      if (it != CurrNode->Children.end()) {
+        // Get the first child to use its RightLeafIndex. The RightLeafIndex is
+        // used as the first child is the initial one added to the stack, thus
+        // it's the last one to be processed. This implies that the leaf
+        // descendants of the first child are assigned the largest index
+        // numbers.
+        CurrNode->RightLeafIndex = it->second->RightLeafIndex;
+        // get the last child to use its LeftLeafIndex.
+        while (std::next(it) != CurrNode->Children.end())
+          it = std::next(it);
+        CurrNode->LeftLeafIndex = it->second->LeftLeafIndex;
+        assert(CurrNode->LeftLeafIndex <= CurrNode->RightLeafIndex &&
+               "LeftLeafIndex should not be larger than RightLeafIndex");
+      }
+    } else if (dyn_cast<SuffixTreeLeafNode>(CurrNode)) {
+      // If the current node is a leaf node, then we can simply
+      // set its LeftLeafIndex and RightLeafIndex.
+      CurrNode->LeftLeafIndex = LeafCounter;
+      CurrNode->RightLeafIndex = LeafCounter;
+      LeafCounter++;
+      LeafNodes.push_back(CurrNode);
+    } else {
+      // If the current node is not a leaf node and this is the first time
+      // we visit this node. This means that its children have not been added
+      // to the stack yet. Hence, we will add the current node back to the stack
+      // and add its children to the stack for processing.
+      ToVisit.push(CurrNode);
+      for (auto &ChildPair : CurrNode->Children) {
+        // TODO: is it correct?
+        if (auto *ChildNode =
+                dyn_cast<SuffixTreeInternalNode>(ChildPair.second))
+          ToVisit.push(ChildNode);
+      }
+      ChildrenAddedToStack.insert(CurrNode);
+    }
   }
 }
 
@@ -227,6 +297,7 @@ void SuffixTree::RepeatedSubstringIterator::advance() {
   // is the state we want to be in.
   RS = RepeatedSubstring();
   N = nullptr;
+  bool ConsiderLeafDescendants = !LeafNodes.empty();
 
   // Each leaf node represents a repeat of a string.
   SmallVector<unsigned> RepeatedSubstringStarts;
@@ -252,13 +323,17 @@ void SuffixTree::RepeatedSubstringIterator::advance() {
         continue;
       }
 
-      if (Length < MinLength)
+      if (ConsiderLeafDescendants || Length < MinLength)
         continue;
 
       // Have an occurrence of a potentially repeated string. Save it.
       auto *Leaf = cast<SuffixTreeLeafNode>(ChildPair.second);
       RepeatedSubstringStarts.push_back(Leaf->getSuffixIdx());
     }
+
+    if (ConsiderLeafDescendants && Length >= MinLength)
+      RepeatedSubstringStarts.assign(Curr->LeftLeafIndex,
+                                     Curr->RightLeafIndex + 1);
 
     // The root never represents a repeated substring. If we're looking at
     // that, then skip it.
@@ -274,6 +349,8 @@ void SuffixTree::RepeatedSubstringIterator::advance() {
     RS.Length = Length;
     for (unsigned StartIdx : RepeatedSubstringStarts)
       RS.StartIndices.push_back(StartIdx);
+    if (ConsiderLeafDescendants)
+      llvm::sort(RS.StartIndices);
     break;
   }
   // At this point, either NewRS is an empty RepeatedSubstring, or it was

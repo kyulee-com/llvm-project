@@ -130,6 +130,10 @@ static cl::opt<bool> DisableGlobalOutlining(
              "write codegen data mode which would apply to all codegen data"),
     cl::init(false));
 
+static cl::opt<bool> ConsiderLeafDescendants(
+    "consider-leaf-descendants", cl::init(false), cl::Hidden,
+    cl::desc("consider leaf decendants (default = off)"));
+
 namespace {
 
 /// Maps \p MachineInstrs to unsigned integers and stores the mappings.
@@ -769,11 +773,17 @@ void MachineOutliner::findCandidates(
       // * End before the other starts
       // * Start after the other ends
       unsigned EndIdx = StartIdx + StringLen - 1;
-      auto FirstOverlap = find_if(
-          CandidatesForRepeatedSeq, [StartIdx, EndIdx](const Candidate &C) {
-            return EndIdx >= C.getStartIdx() && StartIdx <= C.getEndIdx();
-          });
-      if (FirstOverlap != CandidatesForRepeatedSeq.end()) {
+      if (ConsiderLeafDescendants) {
+        // Candidates are already sorted when considering leaf descendatns.
+        if (!CandidatesForRepeatedSeq.empty() &&
+            StartIdx <= CandidatesForRepeatedSeq.back().getEndIdx())
+          continue;
+      } else {
+        auto FirstOverlap = find_if(
+            CandidatesForRepeatedSeq, [StartIdx, EndIdx](const Candidate &C) {
+              return EndIdx >= C.getStartIdx() && StartIdx <= C.getEndIdx();
+            });
+        if (FirstOverlap != CandidatesForRepeatedSeq.end()) {
 #ifndef NDEBUG
         ++NumDiscarded;
         LLVM_DEBUG(dbgs() << "    .. DISCARD candidate @ [" << StartIdx
@@ -782,6 +792,7 @@ void MachineOutliner::findCandidates(
                           << FirstOverlap->getEndIdx() << "]\n");
 #endif
         continue;
+        }
       }
       // It doesn't overlap with anything, so we can outline it.
       // Each sequence is over [StartIt, EndIt].
@@ -987,7 +998,18 @@ bool MachineOutliner::outline(
   // Sort by benefit. The most beneficial functions should be outlined first.
   stable_sort(FunctionList, [](const std::unique_ptr<OutlinedFunction> &LHS,
                                const std::unique_ptr<OutlinedFunction> &RHS) {
-    return LHS->getBenefit() > RHS->getBenefit();
+    if (ConsiderLeafDescendants) {
+      if (LHS->getBenefit() == 0)
+        return false;
+      if (LHS->getBenefit() > 0 && RHS->getBenefit() == 0)
+        return true;
+      // this is essentially comparing the priority of LHS and RHS,
+      // where priority := getNotOutlinedCost / getOutliningCost.
+      // That is, we sort them in a decreasing order of priority.
+      return LHS->getNotOutlinedCost() * RHS->getOutliningCost() >
+             RHS->getNotOutlinedCost() * LHS->getOutliningCost();
+    } else
+      return LHS->getBenefit() > RHS->getBenefit();
   });
 
   // Walk over each function, outlining them as we go along. Functions are
