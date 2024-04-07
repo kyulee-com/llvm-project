@@ -99,6 +99,8 @@ public:
   std::unique_ptr<OutlinedHashTree> releaseOutlinedHashTree() {
     return std::move(HashTree);
   }
+  /// Return the outlined hash tree as read-only data.
+  const OutlinedHashTree *getOutlinedHashTree() { return HashTree.get(); }
 };
 
 } // end namespace llvm

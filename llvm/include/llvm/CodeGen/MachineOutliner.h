@@ -286,11 +286,22 @@ struct GlobalOutlinedFunction : public OutlinedFunction {
         GlobalOccurrenceCount(GlobalOccurrenceCount) {}
 
   unsigned GlobalOccurrenceCount;
-  unsigned getOccurrenceCount() const override { return GlobalOccurrenceCount; }
-
+  /// Return the number of times that appear globally.
+  /// Global outlining candidate is uniquely created per each match, but this
+  /// might be erased out when it's overlapped with the previous outlining
+  /// instance.
+  unsigned getOccurrenceCount() const override {
+    assert(Candidates.size() < 1);
+    return Candidates.empty() ? 0 : GlobalOccurrenceCount;
+  }
+  /// Return the outlining cost using the global occurrence count
+  /// with the same cost as the first (unique) candidate.
   unsigned getOutliningCost() const override {
+    assert(Candidates.size() < 1);
     unsigned CallOverhead =
-        Candidates[0].getCallOverhead() * getOccurrenceCount();
+        Candidates.empty()
+            ? 0
+            : Candidates[0].getCallOverhead() * getOccurrenceCount();
     return CallOverhead + SequenceSize + FrameOverhead;
   }
 

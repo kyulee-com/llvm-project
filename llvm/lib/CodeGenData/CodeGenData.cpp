@@ -148,16 +148,10 @@ CodeGenData &CodeGenData::getInstance() {
         warn(std::move(E), CodeGenDataUsePath);
         return;
       }
-      auto Reader = ReaderOrErr->get();
-      if (auto E = Reader->read()) {
-        warn(std::move(E), CodeGenDataUsePath);
-        return;
-      }
       // Publish each CGData based on the data type in the header.
-      if (Reader->hasOutlinedHashTree()) {
-        CGD->publishOutlinedHashTree(
-            std::move(Reader->releaseOutlinedHashTree()));
-      }
+      auto Reader = ReaderOrErr->get();
+      if (Reader->hasOutlinedHashTree())
+        CGD->publishOutlinedHashTree(Reader->releaseOutlinedHashTree());
     }
   });
   return *(Instance.get());
