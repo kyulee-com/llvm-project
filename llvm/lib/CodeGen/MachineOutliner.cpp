@@ -981,11 +981,17 @@ bool MachineOutliner::outline(
                     << "\n");
   bool OutlinedSomething = false;
 
-  // Sort by benefit. The most beneficial functions should be outlined first.
-  stable_sort(FunctionList, [](const std::unique_ptr<OutlinedFunction> &LHS,
-                               const std::unique_ptr<OutlinedFunction> &RHS) {
-    return LHS->getBenefit() > RHS->getBenefit();
-  });
+  // Sort by priority where priority := getNotOutlinedCost / getOutliningCost.
+  // The function with highest priority should be outlined first.
+  stable_sort(FunctionList,
+              [](const std::unique_ptr<OutlinedFunction> &LHS, const std::unique_ptr<OutlinedFunction> &RHS) {
+                if (LHS->getBenefit() == 0)
+                  return false;
+                if (LHS->getBenefit() > 0 && RHS->getBenefit() == 0)
+                  return true;
+                return LHS->getNotOutlinedCost() * RHS->getOutliningCost() >
+                       RHS->getNotOutlinedCost() * LHS->getOutliningCost();
+              });
 
   // Walk over each function, outlining them as we go along. Functions are
   // outlined greedily, based off the sort above.
