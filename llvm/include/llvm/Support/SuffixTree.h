@@ -205,7 +205,8 @@ public:
     }
 
     RepeatedSubstringIterator(
-        SuffixTreeInternalNode *N, const std::vector<SuffixTreeLeafNode *> &LeafNodes = {})
+        SuffixTreeInternalNode *N,
+        const std::vector<SuffixTreeLeafNode *> &LeafNodes = {})
         : N(N), LeafNodes(LeafNodes) {
       // Do we have a non-null node?
       if (!N)

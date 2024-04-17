@@ -483,6 +483,13 @@ void darwin::Linker::AddLinkArgs(Compilation &C, const ArgList &Args,
       CmdArgs.push_back(
           Args.MakeArgString(Twine("--codegen-data-generate-path=") + Path));
     }
+    if (auto *CGDataThinLTOTwoRoundsArg =
+            Args.getLastArg(options::OPT_fcodegen_data_thinlto_two_rounds_EQ)) {
+      SmallString<128> Path(CGDataThinLTOTwoRoundsArg->getValue());
+      CmdArgs.push_back("-mllvm");
+      CmdArgs.push_back(Args.MakeArgString(
+          Twine("-codegen-data-thinlto-two-rounds-path=") + Path));
+    }
   }
 }
 

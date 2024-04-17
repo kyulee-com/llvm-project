@@ -1840,6 +1840,9 @@ def fcodegen_data_generate_EQ : Joined<["-"], "fcodegen-data-generate=">,
 def fcodegen_data_use_EQ : Joined<["-"], "fcodegen-data-use=">,
     Group<f_Group>, Visibility<[ClangOption, CC1Option]>, MetaVarName<"<file>">,
     HelpText<"Use codegen data read from <file> to optimize the binary">;
+def fcodegen_data_thinlto_two_rounds_EQ : Joined<["-"], "fcodegen-data-thinlto-two-rounds=">,
+    Group<f_Group>, Visibility<[ClangOption, CC1Option]>, MetaVarName<"<dir>">,
+    HelpText<"Run thinlto codegen twice by serializing and deserializing IRs to and from  <dir>">;
 def fswift_async_fp_EQ : Joined<["-"], "fswift-async-fp=">,
     Group<f_Group>,
     Visibility<[ClangOption, CC1Option, CC1AsOption, CLOption]>,

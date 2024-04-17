@@ -11,8 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/CodeGenData/CodeGenDataReader.h"
+#include "llvm/CodeGenData/OutlinedHashTreeRecord.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/WithColor.h"
 
 #define DEBUG_TYPE "cg-data"
@@ -25,7 +29,11 @@ cl::opt<bool>
                         cl::desc("Emit CodeGen Data into custom sections"));
 cl::opt<std::string>
     CodeGenDataUsePath("codegen-data-use-path", cl::init(""), cl::Hidden,
-                       cl::desc("Path to where .cgdata file is read"));
+                       cl::desc("File path to where .cgdata file is read"));
+cl::opt<std::string> CodeGenDataThinLTOTwoRoundsPath(
+    "codegen-data-thinlto-two-rounds-path", cl::init(""), cl::Hidden,
+    cl::desc("Directory path to where the optimized bitcodes are saved and "
+             "restored."));
 
 static std::string getCGDataErrString(cgdata_error Err,
                                       const std::string &ErrMsg = "") {
@@ -139,7 +147,7 @@ CodeGenData &CodeGenData::getInstance() {
     auto *CGD = new CodeGenData();
     Instance.reset(CGD);
 
-    if (CodeGenDataGenerate)
+    if (CodeGenDataGenerate || !CodeGenDataThinLTOTwoRoundsPath.empty())
       CGD->EmitCGData = true;
     else if (!CodeGenDataUsePath.empty()) {
       // Initialize outlined hash tree if the input file name is given.
@@ -215,5 +223,93 @@ Expected<Header> Header::readFromBuffer(const unsigned char *Curr) {
 }
 
 } // end namespace IndexedCGData
+
+namespace cgdata {
+
+static std::string getPath(const std::string &Dir, unsigned Task) {
+  return (Dir + "/" + llvm::Twine(Task) + ".saved_copy.bc").str();
+}
+
+void saveModuleForTwoRounds(const Module &TheModule, unsigned Task) {
+  assert(sys::fs::is_directory(CodeGenDataThinLTOTwoRoundsPath));
+  std::string Path = getPath(CodeGenDataThinLTOTwoRoundsPath, Task);
+  std::error_code EC;
+  raw_fd_ostream OS(Path, EC, sys::fs::OpenFlags::OF_None);
+  if (EC)
+    report_fatal_error(Twine("Failed to open ") + Path +
+                       " to save optimized bitcode\n");
+  WriteBitcodeToFile(TheModule, OS, /* ShouldPreserveUseListOrder */ true);
+}
+
+std::unique_ptr<Module> loadModuleForTwoRounds(BitcodeModule &OrigModule,
+                                               unsigned Task,
+                                               LLVMContext &Context) {
+  assert(sys::fs::is_directory(CodeGenDataThinLTOTwoRoundsPath));
+  std::string Path = getPath(CodeGenDataThinLTOTwoRoundsPath, Task);
+  auto FileOrError = MemoryBuffer::getFile(Path);
+  if (!FileOrError)
+    report_fatal_error(Twine("Failed to open ") + Path +
+                       " to load optimized bitcode\n");
+
+  std::unique_ptr<MemoryBuffer> FileBuffer = std::move(*FileOrError);
+  auto RestoredModule = llvm::parseBitcodeFile(*FileBuffer, Context);
+  if (!RestoredModule)
+    report_fatal_error(Twine("Failed to parse optimized bitcode loaded from ") +
+                       Path + "\n");
+
+  // Restore the original module identifier.
+  (*RestoredModule)->setModuleIdentifier(OrigModule.getModuleIdentifier());
+  return std::move(*RestoredModule);
+}
+
+Error mergeCodeGenData(
+    const std::unique_ptr<std::vector<llvm::SmallString<0>>> InputFiles) {
+  auto MergedOutlinedHashTree = std::make_unique<OutlinedHashTree>();
+  OutlinedHashTreeRecord OutlinerRecord(MergedOutlinedHashTree.get());
+
+  for (auto &InputFile : *(InputFiles)) {
+    if (InputFile.empty())
+      continue;
+    StringRef File = StringRef(InputFile.data(), InputFile.size());
+    std::unique_ptr<MemoryBuffer> Buffer = MemoryBuffer::getMemBuffer(
+        File, "in-memory object file", /*RequiresNullTerminator=*/false);
+    Expected<std::unique_ptr<object::ObjectFile>> BinOrErr =
+        object::ObjectFile::createObjectFile(Buffer->getMemBufferRef());
+    if (!BinOrErr)
+      return BinOrErr.takeError();
+
+    std::unique_ptr<object::ObjectFile> &Obj = BinOrErr.get();
+    Triple TT = Obj->makeTriple();
+    auto SecName =
+        getCodeGenDataSectionName(CG_outline, TT.getObjectFormat(), false);
+    for (auto &Section : Obj->sections()) {
+      Expected<StringRef> NameOrErr = Section.getName();
+      if (!NameOrErr)
+        return NameOrErr.takeError();
+
+      if (*NameOrErr != SecName)
+        continue;
+
+      Expected<StringRef> ContentsOrErr = Section.getContents();
+      if (!ContentsOrErr)
+        return ContentsOrErr.takeError();
+
+      auto *Data =
+          reinterpret_cast<const unsigned char *>((*ContentsOrErr).data());
+      OutlinedHashTree LocalTree;
+      OutlinedHashTreeRecord LocalRecord(&LocalTree);
+      LocalRecord.deserialize(Data);
+
+      OutlinerRecord.merge(LocalRecord);
+    }
+  }
+
+  if (!MergedOutlinedHashTree->empty())
+    cgdata::publishOutlinedHashTree(std::move(MergedOutlinedHashTree));
+
+  return Error::success();
+}
+
+} // end namespace cgdata
 
 } // end namespace llvm

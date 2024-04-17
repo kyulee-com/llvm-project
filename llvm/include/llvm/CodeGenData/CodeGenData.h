@@ -15,8 +15,9 @@
 #define LLVM_CODEGENDATA_CODEGENDATA_H
 
 #include "llvm/ADT/BitmaskEnum.h"
+#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGenData/OutlinedHashTree.h"
-//#include "llvm/Support/Error.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/TargetParser/Triple.h"
 #include <mutex>
@@ -140,6 +141,8 @@ public:
   /// Publish the (globally) merged or read outlined hash tree.
   void publishOutlinedHashTree(std::unique_ptr<OutlinedHashTree> HashTree) {
     PublishedHashTree = std::move(HashTree);
+    // Ensure we disable emitCGData as we do not want to read and write both.
+    EmitCGData = false;
   }
 };
 
@@ -154,6 +157,22 @@ inline const OutlinedHashTree *getOutlinedHashTree() {
 }
 
 inline bool emitCGData() { return CodeGenData::getInstance().emitCGData(); }
+
+inline void
+publishOutlinedHashTree(std::unique_ptr<OutlinedHashTree> HashTree) {
+  CodeGenData::getInstance().publishOutlinedHashTree(std::move(HashTree));
+}
+
+/// Save the current module before the first codegen round.
+void saveModuleForTwoRounds(const Module &TheModule, unsigned Task);
+
+/// Load the current module  before the second codegen round.
+std::unique_ptr<Module> loadModuleForTwoRounds(BitcodeModule &OrigModule,
+                                               unsigned Task,
+                                               LLVMContext &Context);
+
+Error mergeCodeGenData(
+    const std::unique_ptr<std::vector<llvm::SmallString<0>>> InputFiles);
 
 void warn(Error E, StringRef Whence = "");
 void warn(Twine Message, std::string Whence = "", std::string Hint = "");
