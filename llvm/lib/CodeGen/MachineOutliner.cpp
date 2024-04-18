@@ -59,6 +59,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Analysis/ModuleSummaryAnalysis.h"
 #include "llvm/Analysis/OptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
@@ -434,6 +435,9 @@ struct MachineOutliner : public ModulePass {
   /// a global oulined hash tree for the subsequent codegen.
   OutlinedHashTree HashTree;
 
+  /// The combined index to look up the thinlto modules.
+  const ModuleSummaryIndex *TheIndex = nullptr;
+
   /// The mode of the outliner.
   /// When is's CGDataMode::None, candidates are populated with the suffix tree
   /// within a module and outlined.
@@ -448,6 +452,7 @@ struct MachineOutliner : public ModulePass {
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<MachineModuleInfoWrapperPass>();
     AU.addPreserved<MachineModuleInfoWrapperPass>();
+    AU.addRequired<ImmutableModuleSummaryIndexWrapperPass>();
     AU.setPreservesAll();
     ModulePass::getAnalysisUsage(AU);
   }
@@ -503,8 +508,14 @@ struct MachineOutliner : public ModulePass {
                                           InstructionMapper &Mapper,
                                           unsigned Name);
 
-  void initializeOutlinerMode();
+  /// Initialize the outliner mode.
+  void initializeOutlinerMode(const Module &M);
 
+  std::string getOutlinedFunctionName(const Module &M,
+                                      const OutlinedFunction &OF,
+                                      unsigned Name);
+
+  /// Emit the outlined hash tree into __llvm_outlined section.
   void emitOutlinedHashTree(Module &M);
 
   /// Calls 'doOutline()' 1 + OutlinerReruns times.
@@ -844,11 +855,7 @@ MachineFunction *MachineOutliner::createOutlinedFunction(
   // Create the function name. This should be unique.
   // FIXME: We should have a better naming scheme. This should be stable,
   // regardless of changes to the outliner's cost model/traversal order.
-  std::string FunctionName = "OUTLINED_FUNCTION_";
-  if (OutlineRepeatedNum > 0)
-    FunctionName += std::to_string(OutlineRepeatedNum + 1) + "_";
-  FunctionName += std::to_string(Name);
-  LLVM_DEBUG(dbgs() << "NEW FUNCTION: " << FunctionName << "\n");
+  std::string FunctionName = getOutlinedFunctionName(M, OF, Name);
 
   // Create the function using an IR-level function.
   LLVMContext &C = M.getContext();
@@ -1290,8 +1297,18 @@ void MachineOutliner::emitInstrCountChangedRemark(
   }
 }
 
-void MachineOutliner::initializeOutlinerMode() {
+void MachineOutliner::initializeOutlinerMode(const Module &M) {
   if (DisableGlobalOutlining)
+    return;
+
+  // const ModuleSummaryIndex *TheIndex = nullptr;
+  if (auto *IndexWrapperPass =
+          getAnalysisIfAvailable<ImmutableModuleSummaryIndexWrapperPass>())
+    TheIndex = IndexWrapperPass->getIndex();
+
+  // (Full)LTO module does not have functions added to the index.
+  // In this case, we run the outliner without using codegen data as usual.
+  if (TheIndex && !TheIndex->hasExportedFunctions(M))
     return;
 
   // When codegen data write is enabled, we want to write local outlined
@@ -1302,6 +1319,44 @@ void MachineOutliner::initializeOutlinerMode() {
     OutlinerMode = CGDataMode::Write;
   else if (cgdata::hasOutlinedHashTree())
     OutlinerMode = CGDataMode::Read;
+}
+
+// The outlined function name is synthesized as follows:
+//   OUTLINED_FNUCTION_{OutlineRepeatedNum + 1}_{Name}
+// Optionally the suffixes are appended when codegen data is used:
+//   {.mod.{32 bit thinlto module hash}}{.hash.{32 bit content hash}}
+std::string MachineOutliner::getOutlinedFunctionName(const Module &M,
+                                                     const OutlinedFunction &OF,
+                                                     unsigned Name) {
+  std::string FunctionName = "OUTLINED_FUNCTION_";
+  if (OutlineRepeatedNum > 0)
+    FunctionName += std::to_string(OutlineRepeatedNum + 1) + "_";
+  FunctionName += std::to_string(Name);
+
+  if (OutlinerMode != CGDataMode::None) {
+    // Append module hash for ThinLTO module.
+    // This is useful to order outlined functions whose name become unique.
+    if (TheIndex) {
+      assert(TheIndex->hasExportedFunctions(M));
+      auto ModHash = TheIndex->getModuleHash(M.getModuleIdentifier());
+      // Get the 32 bits module hash from the first 64 bits
+      std::string ModSuffix = utostr(ModHash[0] ^ ModHash[1]);
+      FunctionName += ".mod." + ModSuffix;
+    }
+
+    // The combined 32 bit hash from stable hash sequences.
+    // This is useful to hash the target outlined functions based on their
+    // contents.
+    assert(!OF.OutlinedHashSequence.empty());
+    stable_hash CombinedStableHash = stable_hash_combine_range(
+        OF.OutlinedHashSequence.begin(), OF.OutlinedHashSequence.end());
+    std::string HashSuffix = utostr((unsigned)(CombinedStableHash >> 32) ^
+                                    (unsigned)(CombinedStableHash));
+    FunctionName += ".hash." + HashSuffix;
+  }
+
+  LLVM_DEBUG(dbgs() << "NEW FUNCTION: " << FunctionName << "\n");
+  return FunctionName;
 }
 
 void MachineOutliner::emitOutlinedHashTree(Module &M) {
@@ -1333,7 +1388,7 @@ bool MachineOutliner::runOnModule(Module &M) {
   if (M.empty())
     return false;
 
-  initializeOutlinerMode();
+  initializeOutlinerMode(M);
 
   // Number to append to the current outlined function.
   unsigned OutlinedFunctionNum = 0;

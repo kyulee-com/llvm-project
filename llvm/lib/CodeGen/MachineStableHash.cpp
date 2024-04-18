@@ -102,8 +102,10 @@ stable_hash llvm::stableHashValue(const MachineOperand &MO) {
       return 0;
     }
     auto Name = GV->getName();
-    // TODO: When the name encodes the target contents, we could use it
-    // to make more precise hash.
+    // Hash the content hash of the outlined function.
+    auto Pos = Name.find_last_of(".hash.");
+    if (Pos != StringRef::npos)
+      Name = Name.substr(Pos);
     return stable_hash_combine(MO.getType(), MO.getTargetFlags(),
                                stable_hash_combine_string(Name),
                                MO.getOffset());
