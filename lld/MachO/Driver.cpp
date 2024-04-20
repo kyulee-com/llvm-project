@@ -1256,28 +1256,23 @@ static void gatherInputSections() {
 static void codegenDataGenerate() {
   TimeTraceScope timeScope("Generating codegen data");
 
-  OutlinedHashTree outlinedHashTree;
-  OutlinedHashTreeRecord outlinerRecord(&outlinedHashTree);
-
+  OutlinedHashTreeRecord globalOutlineRecord;
   for (ConcatInputSection *isec : inputSections) {
     if (isec->getSegName() == segment_names::data &&
         isec->getName() == section_names::outlinedHashTree) {
       // Read outlined hash tree from each section
-      OutlinedHashTree localTree;
-      OutlinedHashTreeRecord localRecord(&localTree);
-      localRecord.deserialize(isec->data.data());
+      OutlinedHashTreeRecord localOutlineRecord;
+      auto *data = isec->data.data();
+      localOutlineRecord.deserialize(data);
 
       // Merge it to the global hash tree.
-      outlinerRecord.merge(localRecord);
+      globalOutlineRecord.merge(localOutlineRecord);
     }
   }
 
   CodeGenDataWriter Writer;
-  if (!outlinerRecord.empty()) {
-    if (auto E = Writer.mergeCGDataKind(CGDataKind::FunctionOutlinedHashTree))
-      error("fail to set CGDataKind::FunctionOutlinedHashTree");
-    Writer.addRecord(outlinerRecord);
-  }
+  if (!globalOutlineRecord.empty())
+    Writer.addRecord(globalOutlineRecord);
 
   std::error_code EC;
   auto fileName = config->codegenDataGeneratePath;

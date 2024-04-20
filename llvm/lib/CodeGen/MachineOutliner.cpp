@@ -433,7 +433,7 @@ struct MachineOutliner : public ModulePass {
   /// which will be dead-stripped not going to the final binary.
   /// A post-process using llvm-cgdata, lld, or ThinLTO can merge them into
   /// a global oulined hash tree for the subsequent codegen.
-  OutlinedHashTree HashTree;
+  std::unique_ptr<OutlinedHashTree> LocalHashTree;
 
   /// The combined index to look up the thinlto modules.
   const ModuleSummaryIndex *TheIndex = nullptr;
@@ -442,7 +442,7 @@ struct MachineOutliner : public ModulePass {
   /// When is's CGDataMode::None, candidates are populated with the suffix tree
   /// within a module and outlined.
   /// When it's CGDataMode::Write, in addition to CGDataMode::None, the hash
-  /// sequences of outlined functions are published into HashTree.
+  /// sequences of outlined functions are published into LocalHashTree.
   /// When it's CGDataMode::Read, candidates are populated with the global
   /// outlined hash tree that has been built by the previous codegen.
   CGDataMode OutlinerMode = CGDataMode::None;
@@ -996,15 +996,15 @@ bool MachineOutliner::outline(
 
   // Sort by priority where priority := getNotOutlinedCost / getOutliningCost.
   // The function with highest priority should be outlined first.
-  stable_sort(FunctionList,
-              [](const std::unique_ptr<OutlinedFunction> &LHS, const std::unique_ptr<OutlinedFunction> &RHS) {
-                if (LHS->getBenefit() == 0)
-                  return false;
-                if (LHS->getBenefit() > 0 && RHS->getBenefit() == 0)
-                  return true;
-                return LHS->getNotOutlinedCost() * RHS->getOutliningCost() >
-                       RHS->getNotOutlinedCost() * LHS->getOutliningCost();
-              });
+  stable_sort(FunctionList, [](const std::unique_ptr<OutlinedFunction> &LHS,
+                               const std::unique_ptr<OutlinedFunction> &RHS) {
+    if (RHS->getBenefit() == 0)
+      return true;
+    if (LHS->getBenefit() == 0)
+      return false;
+    return LHS->getNotOutlinedCost() * RHS->getOutliningCost() >
+           RHS->getNotOutlinedCost() * LHS->getOutliningCost();
+  });
 
   // Walk over each function, outlining them as we go along. Functions are
   // outlined greedily, based off the sort above.
@@ -1148,7 +1148,7 @@ bool MachineOutliner::outline(
 
     if (OutlinerMode == CGDataMode::Write) {
       unsigned Count = OF->Candidates.size();
-      HashTree.insert({OF->OutlinedHashSequence, Count});
+      LocalHashTree->insert({OF->OutlinedHashSequence, Count});
     }
   }
 
@@ -1315,9 +1315,12 @@ void MachineOutliner::initializeOutlinerMode(const Module &M) {
   // hash tree to a custom section, `__llvm_outline`.
   // When the outlined hash tree is available from the previous codegen data,
   // we want to read it to optimistically create outlining candidates.
-  if (cgdata::emitCGData())
+  if (cgdata::emitCGData()) {
     OutlinerMode = CGDataMode::Write;
-  else if (cgdata::hasOutlinedHashTree())
+    // Create an outlined hash tree to be published.
+    LocalHashTree.reset(new OutlinedHashTree());
+    // We don't need to read the outlined hash tree from the previous codegen
+  } else if (cgdata::hasOutlinedHashTree())
     OutlinerMode = CGDataMode::Read;
 }
 
@@ -1360,15 +1363,17 @@ std::string MachineOutliner::getOutlinedFunctionName(const Module &M,
 }
 
 void MachineOutliner::emitOutlinedHashTree(Module &M) {
-  if (!HashTree.empty()) {
+  assert(LocalHashTree);
+  if (!LocalHashTree->empty()) {
     LLVM_DEBUG({
-      dbgs() << "Emit outlined hash tree. Size: " << HashTree.size() << "\n";
+      dbgs() << "Emit outlined hash tree. Size: " << LocalHashTree->size()
+             << "\n";
     });
 
     SmallVector<char, 0> Buf;
     raw_svector_ostream OS(Buf);
 
-    OutlinedHashTreeRecord HTR(&HashTree);
+    OutlinedHashTreeRecord HTR(std::move(LocalHashTree));
     HTR.serialize(OS);
 
     llvm::StringRef Data(Buf.data(), Buf.size());

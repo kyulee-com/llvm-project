@@ -59,8 +59,8 @@ static std::string getCGDataErrString(cgdata_error Err,
   case cgdata_error::too_large:
     OS << "too much codegen data";
     break;
-  case cgdata_error::truncated:
-    OS << "truncated codegen data";
+  case cgdata_error::empty_cgdata:
+    OS << "empty codegen data";
     break;
   case cgdata_error::malformed:
     OS << "malformed codegen data";
@@ -154,7 +154,8 @@ CodeGenData &CodeGenData::getInstance() {
       // We do not error-out when failing to parse the input file.
       // Instead, just emit an warning message and fall back as if no CGData
       // were avaiable.
-      auto ReaderOrErr = IndexedCodeGenDataReader::create(CodeGenDataUsePath);
+      auto FS = vfs::getRealFileSystem();
+      auto ReaderOrErr = CodeGenDataReader::create(CodeGenDataUsePath, *FS);
       if (Error E = ReaderOrErr.takeError()) {
         warn(std::move(E), CodeGenDataUsePath);
         return;
@@ -264,9 +265,8 @@ std::unique_ptr<Module> loadModuleForTwoRounds(BitcodeModule &OrigModule,
 
 Error mergeCodeGenData(
     const std::unique_ptr<std::vector<llvm::SmallString<0>>> InputFiles) {
-  auto MergedOutlinedHashTree = std::make_unique<OutlinedHashTree>();
-  OutlinedHashTreeRecord OutlinerRecord(MergedOutlinedHashTree.get());
 
+  OutlinedHashTreeRecord GlobalOutlineRecord;
   for (auto &InputFile : *(InputFiles)) {
     if (InputFile.empty())
       continue;
@@ -279,33 +279,13 @@ Error mergeCodeGenData(
       return BinOrErr.takeError();
 
     std::unique_ptr<object::ObjectFile> &Obj = BinOrErr.get();
-    Triple TT = Obj->makeTriple();
-    auto SecName =
-        getCodeGenDataSectionName(CG_outline, TT.getObjectFormat(), false);
-    for (auto &Section : Obj->sections()) {
-      Expected<StringRef> NameOrErr = Section.getName();
-      if (!NameOrErr)
-        return NameOrErr.takeError();
-
-      if (*NameOrErr != SecName)
-        continue;
-
-      Expected<StringRef> ContentsOrErr = Section.getContents();
-      if (!ContentsOrErr)
-        return ContentsOrErr.takeError();
-
-      auto *Data =
-          reinterpret_cast<const unsigned char *>((*ContentsOrErr).data());
-      OutlinedHashTree LocalTree;
-      OutlinedHashTreeRecord LocalRecord(&LocalTree);
-      LocalRecord.deserialize(Data);
-
-      OutlinerRecord.merge(LocalRecord);
-    }
+    if (auto E = CodeGenDataReader::mergeFromObjectFile(Obj.get(),
+                                                        GlobalOutlineRecord))
+      return E;
   }
 
-  if (!MergedOutlinedHashTree->empty())
-    cgdata::publishOutlinedHashTree(std::move(MergedOutlinedHashTree));
+  if (!GlobalOutlineRecord.empty())
+    cgdata::publishOutlinedHashTree(std::move(GlobalOutlineRecord.HashTree));
 
   return Error::success();
 }

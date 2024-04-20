@@ -67,7 +67,7 @@ void OutlinedHashTreeRecord::serialize(raw_ostream &OS) const {
   }
 }
 
-void OutlinedHashTreeRecord::deserialize(const unsigned char *Ptr) {
+void OutlinedHashTreeRecord::deserialize(const unsigned char *&Ptr) {
   IdHashNodeStableMapTy IdNodeStableMap;
 
   auto NumIdNodeStableMap =
@@ -91,19 +91,18 @@ void OutlinedHashTreeRecord::deserialize(const unsigned char *Ptr) {
   convertFromStableData(IdNodeStableMap);
 }
 
-void OutlinedHashTreeRecord::serializeYAML(raw_ostream &OS) const {
+void OutlinedHashTreeRecord::serializeYAML(yaml::Output &YOS) const {
   IdHashNodeStableMapTy IdNodeStableMap;
   convertToStableData(IdNodeStableMap);
 
-  yaml::Output yamlOS(OS);
-  yamlOS << IdNodeStableMap;
+  YOS << IdNodeStableMap;
 }
 
-void OutlinedHashTreeRecord::deserializeYAML(MemoryBufferRef Buffer) {
+void OutlinedHashTreeRecord::deserializeYAML(yaml::Input &YOS) {
   IdHashNodeStableMapTy IdNodeStableMap;
 
-  yaml::Input yamlOS(Buffer);
-  yamlOS >> IdNodeStableMap;
+  YOS >> IdNodeStableMap;
+  YOS.nextDocument();
 
   convertFromStableData(IdNodeStableMap);
 }

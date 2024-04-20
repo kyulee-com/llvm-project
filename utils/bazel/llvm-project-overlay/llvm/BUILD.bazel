@@ -4372,6 +4372,25 @@ cc_binary(
 )
 
 cc_library(
+    name = "llvm-cgdata-lib",
+    srcs = glob(["tools/llvm-cgdata/*.cpp"]),
+    copts = llvm_copts,
+    deps = [
+        ":CpdeGen",
+        ":CpdeGenData",
+        ":Core",
+        ":Object",
+        ":Support",
+    ],
+)
+
+llvm_driver_cc_binary(
+    name = "llvm-cgdata",
+    stamp = 0,
+    deps = [":llvm-cgdata-lib"],
+)
+
+cc_library(
     name = "llvm-profdata-lib",
     srcs = glob(["tools/llvm-profdata/*.cpp"]),
     copts = llvm_copts,

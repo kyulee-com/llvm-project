@@ -17,7 +17,9 @@
 #include "llvm/ADT/BitmaskEnum.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGenData/OutlinedHashTree.h"
+#include "llvm/CodeGenData/OutlinedHashTreeRecord.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/TargetParser/Triple.h"
 #include <mutex>
@@ -49,7 +51,7 @@ enum class cgdata_error {
   bad_header,
   unsupported_version,
   too_large,
-  truncated,
+  empty_cgdata,
   malformed,
 };
 
@@ -171,6 +173,8 @@ std::unique_ptr<Module> loadModuleForTwoRounds(BitcodeModule &OrigModule,
                                                unsigned Task,
                                                LLVMContext &Context);
 
+/// Merge the codegen data from the input files in scratch vector in ThinLTO
+/// two-codegen rounds.
 Error mergeCodeGenData(
     const std::unique_ptr<std::vector<llvm::SmallString<0>>> InputFiles);
 

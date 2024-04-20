@@ -23,42 +23,24 @@ namespace llvm {
 class CGDataOStream;
 
 class CodeGenDataWriter {
-  /// The outlined hash tree
+  /// The outlined hash tree to be written.
   OutlinedHashTreeRecord HashTreeRecord;
 
-  // An enum describing the attributes of the cg data.
+  /// A bit mask describing the kind of the codegen data.
   CGDataKind DataKind = CGDataKind::Unknown;
 
 public:
   CodeGenDataWriter() = default;
   ~CodeGenDataWriter() = default;
 
-  /// Add the outlined hash tree record.
-  void addRecord(const OutlinedHashTreeRecord Record);
+  /// Add the outlined hash tree record. The input Record is released.
+  void addRecord(OutlinedHashTreeRecord &Record);
 
-  /// Write the profile to \c OS
+  /// Write the codegen data to \c OS
   Error write(raw_fd_ostream &OS);
 
-  /// Write the profile to a string output stream \c OS
-  Error write(raw_string_ostream &OS);
-
-  /// Write the profile in text format to \c OS
+  /// Write the codegen data in text format to \c OS
   Error writeText(raw_fd_ostream &OS);
-
-  /// Update the attributes of the current CGData from the attributes
-  /// specified. For now, each CGDataKind is assumed to be orthogonal.
-  Error mergeCGDataKind(const CGDataKind Other) {
-    // If the kind is unset, this is the first CGData we are merging so just
-    // set it to the given type.
-    if (DataKind == CGDataKind::Unknown) {
-      DataKind = Other;
-      return Error::success();
-    }
-
-    // Now we update the CGData type with the bits that are set.
-    DataKind |= Other;
-    return Error::success();
-  }
 
   /// Return the attributes of the current CGData.
   CGDataKind getCGDataKind() const { return DataKind; }
@@ -70,9 +52,14 @@ public:
   }
 
 private:
+  /// The offset of the outlined hash tree in the file.
   uint64_t OutlinedHashTreeOffset;
 
+  /// Write the codegen data header to \c COS
   Error writeHeader(CGDataOStream &COS);
+
+  /// Write the codegen data header in text to \c OS
+  Error writeHeaderText(raw_fd_ostream &OS);
 
   Error writeImpl(CGDataOStream &COS);
 };

@@ -14,7 +14,6 @@
 #ifndef LLVM_CODEGENDATA_OUTLINEDHASHTREERECORD_H
 #define LLVM_CODEGENDATA_OUTLINEDHASHTREERECORD_H
 
-#include "llvm/CodeGenData/CodeGenData.h"
 #include "llvm/CodeGenData/OutlinedHashTree.h"
 
 namespace llvm {
@@ -25,22 +24,23 @@ using HashNodeIdMapTy = std::unordered_map<const HashNode *, unsigned>;
 
 struct OutlinedHashTreeRecord {
   /// The outlined hash tree being held for serialization and deserialization.
-  OutlinedHashTree *HashTree;
+  std::unique_ptr<OutlinedHashTree> HashTree;
 
-  OutlinedHashTreeRecord() = default;
-  OutlinedHashTreeRecord(OutlinedHashTree *HashTree) : HashTree(HashTree){};
+  OutlinedHashTreeRecord() { HashTree = std::make_unique<OutlinedHashTree>(); }
+  OutlinedHashTreeRecord(std::unique_ptr<OutlinedHashTree> HashTree)
+      : HashTree(std::move(HashTree)){};
 
   void serialize(raw_ostream &OS) const;
-  void deserialize(const unsigned char *Ptr);
-  void serializeYAML(raw_ostream &OS) const;
-  void deserializeYAML(MemoryBufferRef Buffer);
+  void deserialize(const unsigned char *&Ptr);
+  void serializeYAML(yaml::Output &YOS) const;
+  void deserializeYAML(yaml::Input &YOS);
 
   /// Merge the other outlined hash tree into this one.
   void merge(const OutlinedHashTreeRecord &Other) {
-    HashTree->merge(Other.HashTree);
+    HashTree->merge(Other.HashTree.get());
   }
 
-  bool empty() { return !HashTree || HashTree->empty(); }
+  bool empty() { return HashTree->empty(); }
 
 private:
   /// Convert HashTree to stable data.

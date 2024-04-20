@@ -21,12 +21,45 @@ using namespace llvm;
 namespace llvm {
 
 static Expected<std::unique_ptr<MemoryBuffer>>
-setupMemoryBuffer(const Twine &Filename) {
-  auto BufferOrErr = MemoryBuffer::getFileOrSTDIN(Filename);
-  if (auto EC = BufferOrErr.getError())
+setupMemoryBuffer(const Twine &Filename, vfs::FileSystem &FS) {
+  auto BufferOrErr = Filename.str() == "-" ? MemoryBuffer::getSTDIN()
+                                           : FS.getBufferForFile(Filename);
+  if (std::error_code EC = BufferOrErr.getError())
     return errorCodeToError(EC);
-
   return std::move(BufferOrErr.get());
+}
+
+Error CodeGenDataReader::mergeFromObjectFile(
+    const object::ObjectFile *Obj,
+    OutlinedHashTreeRecord &GlobalOutlineRecord) {
+  Triple TT = Obj->makeTriple();
+  auto CGOutLineName =
+      getCodeGenDataSectionName(CG_outline, TT.getObjectFormat(), false);
+
+  for (auto &Section : Obj->sections()) {
+    Expected<StringRef> NameOrErr = Section.getName();
+    if (!NameOrErr)
+      return NameOrErr.takeError();
+    Expected<StringRef> ContentsOrErr = Section.getContents();
+    if (!ContentsOrErr)
+      return ContentsOrErr.takeError();
+    auto *Data = reinterpret_cast<const unsigned char *>(ContentsOrErr->data());
+    auto *EndData = Data + ContentsOrErr->size();
+
+    if (*NameOrErr == CGOutLineName) {
+      // In case dealing with an executable that has concatenaed cgdata,
+      // we want to merge them into a single cgdata.
+      // Although it's not a typical workflow, we support this scenario.
+      while (Data != EndData) {
+        OutlinedHashTreeRecord LocalOutlineRecord;
+        LocalOutlineRecord.deserialize(Data);
+        GlobalOutlineRecord.merge(LocalOutlineRecord);
+      }
+    }
+    // TODO: Add support for other cgdata sections.
+  }
+
+  return Error::success();
 }
 
 Error IndexedCodeGenDataReader::read() {
@@ -46,31 +79,34 @@ Error IndexedCodeGenDataReader::read() {
   Header = HeaderOr.get();
   if (hasOutlinedHashTree()) {
     const unsigned char *Ptr = Start + Header.OutlinedHashTreeOffset;
-    auto Tree = std::make_unique<OutlinedHashTree>();
-    OutlinedHashTreeRecord Record(Tree.get());
-    Record.deserialize(Ptr);
-
-    HashTree = std::move(Tree);
+    HashTreeRecord.deserialize(Ptr);
   }
 
   return success();
 }
 
-Expected<std::unique_ptr<IndexedCodeGenDataReader>>
-IndexedCodeGenDataReader::create(const Twine &Path) {
+Expected<std::unique_ptr<CodeGenDataReader>>
+CodeGenDataReader::create(const Twine &Path, vfs::FileSystem &FS) {
   // Set up the buffer to read.
-  auto BufferOrError = setupMemoryBuffer(Path);
+  auto BufferOrError = setupMemoryBuffer(Path, FS);
   if (Error E = BufferOrError.takeError())
     return std::move(E);
-  return IndexedCodeGenDataReader::create(std::move(BufferOrError.get()));
+  return CodeGenDataReader::create(std::move(BufferOrError.get()));
 }
 
-Expected<std::unique_ptr<IndexedCodeGenDataReader>>
-IndexedCodeGenDataReader::create(std::unique_ptr<MemoryBuffer> Buffer) {
+Expected<std::unique_ptr<CodeGenDataReader>>
+CodeGenDataReader::create(std::unique_ptr<MemoryBuffer> Buffer) {
+  if (Buffer->getBufferSize() == 0)
+    return make_error<CGDataError>(cgdata_error::empty_cgdata);
+
+  std::unique_ptr<CodeGenDataReader> Reader;
   // Create the reader.
-  if (!IndexedCodeGenDataReader::hasFormat(*Buffer))
-    return make_error<CGDataError>(cgdata_error::bad_magic);
-  auto Reader = std::make_unique<IndexedCodeGenDataReader>(std::move(Buffer));
+  if (IndexedCodeGenDataReader::hasFormat(*Buffer))
+    Reader.reset(new IndexedCodeGenDataReader(std::move(Buffer)));
+  else if (TextCodeGenDataReader::hasFormat(*Buffer))
+    Reader.reset(new TextCodeGenDataReader(std::move(Buffer)));
+  else
+    return make_error<CGDataError>(cgdata_error::malformed);
 
   // Initialize the reader and return the result.
   if (Error E = Reader->read())
@@ -90,4 +126,39 @@ bool IndexedCodeGenDataReader::hasFormat(const MemoryBuffer &DataBuffer) {
   return Magic == IndexedCGData::Magic;
 }
 
+bool TextCodeGenDataReader::hasFormat(const MemoryBuffer &Buffer) {
+  // Verify that this really looks like plain ASCII text by checking a
+  // 'reasonable' number of characters (up to profile magic size).
+  size_t count = std::min(Buffer.getBufferSize(), sizeof(uint64_t));
+  StringRef buffer = Buffer.getBufferStart();
+  return count == 0 ||
+         std::all_of(buffer.begin(), buffer.begin() + count,
+                     [](char c) { return isPrint(c) || isSpace(c); });
+}
+Error TextCodeGenDataReader::read() {
+  using namespace support;
+
+  // Parse the custom header line by line.
+  while (Line->starts_with(":")) {
+    StringRef Str = Line->substr(1);
+    if (Str.equals_insensitive("outlined_hash_tree"))
+      DataKind |= CGDataKind::FunctionOutlinedHashTree;
+    else
+      return error(cgdata_error::bad_header);
+    ++Line;
+  }
+
+  // The YAML docs follow after the header.
+  const char *Pos = (*Line).data();
+  size_t Size = reinterpret_cast<size_t>(DataBuffer->getBufferEnd()) -
+                reinterpret_cast<size_t>(Pos);
+  yaml::Input YOS(StringRef(Pos, Size));
+
+  if (hasOutlinedHashTree())
+    HashTreeRecord.deserializeYAML(YOS);
+
+  // TODO: Add more yaml cgdata in order
+
+  return Error::success();
+}
 } // end namespace llvm

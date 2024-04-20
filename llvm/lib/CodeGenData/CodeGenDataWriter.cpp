@@ -85,17 +85,14 @@ public:
 
 } // end namespace llvm
 
-void CodeGenDataWriter::addRecord(const OutlinedHashTreeRecord Record) {
+void CodeGenDataWriter::addRecord(OutlinedHashTreeRecord &Record) {
   assert(Record.HashTree && "empty hash tree in the record");
-  HashTreeRecord = Record;
+  HashTreeRecord.HashTree = std::move(Record.HashTree);
+
+  DataKind |= CGDataKind::FunctionOutlinedHashTree;
 }
 
 Error CodeGenDataWriter::write(raw_fd_ostream &OS) {
-  CGDataOStream COS(OS);
-  return writeImpl(COS);
-}
-
-Error CodeGenDataWriter::write(raw_string_ostream &OS) {
   CGDataOStream COS(OS);
   return writeImpl(COS);
 }
@@ -140,6 +137,28 @@ Error CodeGenDataWriter::writeImpl(CGDataOStream &COS) {
   CGDataPatchItem PatchItems[] = {
       {OutlinedHashTreeOffset, &OutlinedHashTreeFieldStart, 1}};
   COS.patch(PatchItems);
+
+  return Error::success();
+}
+
+Error CodeGenDataWriter::writeHeaderText(raw_fd_ostream &OS) {
+  if (hasOutlinedHashTree())
+    OS << "# Outlined stable hash tree\n:outlined_hash_tree\n";
+
+  // TODO: Add more data types in this header
+
+  return Error::success();
+}
+
+Error CodeGenDataWriter::writeText(raw_fd_ostream &OS) {
+  if (Error E = writeHeaderText(OS))
+    return E;
+
+  yaml::Output YOS(OS);
+  if (hasOutlinedHashTree())
+    HashTreeRecord.serializeYAML(YOS);
+
+  // TODO: Write more yaml cgdata in order
 
   return Error::success();
 }
