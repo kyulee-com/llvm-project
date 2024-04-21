@@ -477,18 +477,17 @@ void darwin::Linker::AddLinkArgs(Compilation &C, const ArgList &Args,
       CmdArgs.push_back(Args.MakeArgString(Twine("--cs-profile-path=") + Path));
     }
 
-    if (auto *CGDataGenerateArg =
-            Args.getLastArg(options::OPT_fcodegen_data_generate_EQ)) {
-      SmallString<128> Path(CGDataGenerateArg->getValue());
+    auto *CodeGenDataGenArg =
+        Args.getLastArg(options::OPT_fcodegen_data_generate,
+                        options::OPT_fcodegen_data_generate_EQ);
+    if (CodeGenDataGenArg) {
+      SmallString<128> Path(CodeGenDataGenArg->getNumValues() == 0
+                                ? ""
+                                : CodeGenDataGenArg->getValue());
+      if (Path.empty() || llvm::sys::fs::is_directory(Path))
+        llvm::sys::path::append(Path, "default.cgdata");
       CmdArgs.push_back(
           Args.MakeArgString(Twine("--codegen-data-generate-path=") + Path));
-    }
-    if (auto *CGDataThinLTOTwoRoundsArg =
-            Args.getLastArg(options::OPT_fcodegen_data_thinlto_two_rounds_EQ)) {
-      SmallString<128> Path(CGDataThinLTOTwoRoundsArg->getValue());
-      CmdArgs.push_back("-mllvm");
-      CmdArgs.push_back(Args.MakeArgString(
-          Twine("-codegen-data-thinlto-two-rounds-path=") + Path));
     }
   }
 }
@@ -648,14 +647,45 @@ void darwin::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back("-enable-linkonceodr-outlining");
 
   // Propagate codegen data flags to the linker for the LTO backend.
-  if (auto *A = Args.getLastArg(options::OPT_fcodegen_data_generate_EQ)) {
+  auto *CodeGenDataGenArg =
+      Args.getLastArg(options::OPT_fcodegen_data_generate,
+                      options::OPT_fcodegen_data_generate_EQ);
+  auto *CodeGenDataUseArg = Args.getLastArg(options::OPT_fcodegen_data_use,
+                                            options::OPT_fcodegen_data_use_EQ);
+  auto *CodeGenDataTwoRoundsArg =
+      Args.getLastArg(options::OPT_fcodegen_data_thinlto_two_rounds,
+                      options::OPT_fcodegen_data_thinlto_two_rounds_EQ);
+
+  // For codegen data gen, the output file is passed to the linker
+  // while a boolean flag is passed to the LTO backend.
+  if (CodeGenDataGenArg) {
     CmdArgs.push_back("-mllvm");
     CmdArgs.push_back("-codegen-data-generate");
-  } else if (auto *A = Args.getLastArg(options::OPT_fcodegen_data_use_EQ)) {
-    SmallString<128> Path(A->getValue());
+  }
+
+  // For codegen data use, the input file is passed to the LTO backend.
+  if (CodeGenDataUseArg) {
+    SmallString<128> Path(CodeGenDataUseArg->getNumValues() == 0
+                              ? ""
+                              : CodeGenDataUseArg->getValue());
+    if (Path.empty() || llvm::sys::fs::is_directory(Path))
+      llvm::sys::path::append(Path, "default.cgdata");
     CmdArgs.push_back("-mllvm");
     CmdArgs.push_back(
         Args.MakeArgString("-codegen-data-use-path=" + Path.str()));
+  }
+
+  // For codegen data thinlto two rounds, the output directory needs to
+  // be passed. A temp directory is created if it does not exist.
+  if (CodeGenDataTwoRoundsArg) {
+    SmallString<128> Path(CodeGenDataTwoRoundsArg->getNumValues() == 0
+                              ? ""
+                              : CodeGenDataTwoRoundsArg->getValue());
+    if (Path.empty())
+      llvm::sys::fs::createUniqueDirectory("cgdata", Path);
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back(Args.MakeArgString(
+        "-codegen-data-thinlto-two-rounds-path=" + Path.str()));
   }
 
   // Setup statistics file output.

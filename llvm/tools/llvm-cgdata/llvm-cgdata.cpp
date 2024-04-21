@@ -28,7 +28,6 @@
 using namespace llvm;
 using namespace llvm::object;
 
-
 // TODO: https://llvm.org/docs/CommandGuide/llvm-cgdata.html has documentations
 // on each subcommand.
 cl::SubCommand DumpSubcommand(
@@ -60,8 +59,7 @@ cl::opt<std::string> Filename(cl::Positional, cl::desc("<cgdata-file>"),
 cl::list<std::string> InputFilenames(cl::Positional, cl::sub(MergeSubcommand),
                                      cl::desc("<binary-files...>"));
 cl::opt<CGDataFormat> OutputFormat(
-    cl::desc("Format of output data"),
-    cl::sub(DumpSubcommand),
+    cl::desc("Format of output data"), cl::sub(DumpSubcommand),
     cl::init(CD_Text),
     cl::values(clEnumValN(CD_Text, "text", "Text encoding"),
                clEnumValN(CD_Binary, "binary", "Binary encoding")));
@@ -101,8 +99,8 @@ static int dump_main(int argc, const char *argv[]) {
 
   std::error_code EC;
   raw_fd_ostream OS(OutputFilename.data(), EC,
-                        OutputFormat == CD_Text ? sys::fs::OF_TextWithCRLF
-                                                : sys::fs::OF_None);
+                    OutputFormat == CD_Text ? sys::fs::OF_TextWithCRLF
+                                            : sys::fs::OF_None);
   if (EC)
     exitWithErrorCode(EC, OutputFilename);
 
@@ -133,7 +131,7 @@ static bool handleBuffer(StringRef Filename, MemoryBufferRef Buffer,
                          OutlinedHashTreeRecord &GlobalOutlineRecord);
 
 static bool handleArchive(StringRef Filename, Archive &Arch,
-                         OutlinedHashTreeRecord &GlobalOutlineRecord) {
+                          OutlinedHashTreeRecord &GlobalOutlineRecord) {
   bool Result = true;
   Error Err = Error::success();
   for (const auto &Child : Arch.children(Err)) {
@@ -159,7 +157,8 @@ static bool handleBuffer(StringRef Filename, MemoryBufferRef Buffer,
 
   bool Result = true;
   if (auto *Obj = dyn_cast<ObjectFile>(BinOrErr->get())) {
-    if (Error E = CodeGenDataReader::mergeFromObjectFile(Obj, GlobalOutlineRecord))
+    if (Error E =
+            CodeGenDataReader::mergeFromObjectFile(Obj, GlobalOutlineRecord))
       exitWithError(std::move(E), Filename);
   } else if (auto *Arch = dyn_cast<Archive>(BinOrErr->get())) {
     Result &= handleArchive(Filename, *Arch, GlobalOutlineRecord);
@@ -171,11 +170,12 @@ static bool handleBuffer(StringRef Filename, MemoryBufferRef Buffer,
   return Result;
 }
 
-static bool handleFile(StringRef Filename, OutlinedHashTreeRecord &GlobalOutlineRecord) {
-    ErrorOr<std::unique_ptr<MemoryBuffer>> BuffOrErr =
-        MemoryBuffer::getFileOrSTDIN(Filename);
-    if (std::error_code EC = BuffOrErr.getError())
-          exitWithErrorCode(EC, Filename);
+static bool handleFile(StringRef Filename,
+                       OutlinedHashTreeRecord &GlobalOutlineRecord) {
+  ErrorOr<std::unique_ptr<MemoryBuffer>> BuffOrErr =
+      MemoryBuffer::getFileOrSTDIN(Filename);
+  if (std::error_code EC = BuffOrErr.getError())
+    exitWithErrorCode(EC, Filename);
   return handleBuffer(Filename, *BuffOrErr.get(), GlobalOutlineRecord);
 }
 
@@ -205,8 +205,7 @@ static int merge_main(int argc, const char *argv[]) {
   return 0;
 }
 
-int llvm_cgdata_main(int argc, char **argvNonConst,
-                       const llvm::ToolContext &) {
+int llvm_cgdata_main(int argc, char **argvNonConst, const llvm::ToolContext &) {
   const char **argv = const_cast<const char **>(argvNonConst);
 
   StringRef ProgName(sys::path::filename(argv[0]));

@@ -2753,14 +2753,56 @@ void tools::addMachineOutlinerArgs(const Driver &D,
     }
   }
 
+  auto *CodeGenDataGenArg =
+      Args.getLastArg(options::OPT_fcodegen_data_generate,
+                      options::OPT_fcodegen_data_generate_EQ);
+  auto *CodeGenDataUseArg = Args.getLastArg(options::OPT_fcodegen_data_use,
+                                            options::OPT_fcodegen_data_use_EQ);
+  auto *CodeGenDataTwoRoundsArg =
+      Args.getLastArg(options::OPT_fcodegen_data_thinlto_two_rounds,
+                      options::OPT_fcodegen_data_thinlto_two_rounds_EQ);
+
+  // We only allow one of the three options to be specified.
+  if (CodeGenDataGenArg && CodeGenDataUseArg)
+    D.Diag(diag::err_drv_argument_not_allowed_with)
+        << CodeGenDataGenArg->getAsString(Args)
+        << CodeGenDataUseArg->getAsString(Args);
+  if (CodeGenDataGenArg && CodeGenDataTwoRoundsArg)
+    D.Diag(diag::err_drv_argument_not_allowed_with)
+        << CodeGenDataGenArg->getAsString(Args)
+        << CodeGenDataTwoRoundsArg->getAsString(Args);
+  if (CodeGenDataUseArg && CodeGenDataTwoRoundsArg)
+    D.Diag(diag::err_drv_argument_not_allowed_with)
+        << CodeGenDataUseArg->getAsString(Args)
+        << CodeGenDataTwoRoundsArg->getAsString(Args);
+
   // For codegen data gen, the output file is passed to the linker
   // while a boolean flag is passed to the LLVM backend.
-  // For codegen data use, the input file is passed to the LLVM backend.
-  if (Arg *A = Args.getLastArg(options::OPT_fcodegen_data_generate_EQ))
+  if (CodeGenDataGenArg)
     addArg(Twine("-codegen-data-generate"));
-  else if (Arg *A = Args.getLastArg(options::OPT_fcodegen_data_use_EQ)) {
-    SmallString<128> Path(A->getValue());
+
+  // For codegen data use, the input file is passed to the LLVM backend.
+  if (CodeGenDataUseArg) {
+    SmallString<128> Path(CodeGenDataUseArg->getNumValues() == 0
+                              ? ""
+                              : CodeGenDataUseArg->getValue());
+    if (Path.empty() || llvm::sys::fs::is_directory(Path))
+      llvm::sys::path::append(Path, "default.cgdata");
     addArg(Twine("-codegen-data-use-path=" + Path.str()));
+  }
+
+  // For codegen data thinlto two rounds, the output directory needs to
+  // be passed. A temp directory is created if it does not exist.
+  // In fact, this flag is needed for the thinlto's link flag only.
+  if (CodeGenDataTwoRoundsArg) {
+    SmallString<128> Path(CodeGenDataTwoRoundsArg->getNumValues() == 0
+                              ? ""
+                              : CodeGenDataTwoRoundsArg->getValue());
+    if (!Path.empty() && !llvm::sys::fs::is_directory(Path))
+      D.Diag(diag::err_drv_unable_to_set_working_directory) << Path.str();
+    if (Path.empty())
+      llvm::sys::fs::createUniqueDirectory("cgdata", Path);
+    addArg(Twine("-codegen-data-thinlto-two-rounds-path=" + Path.str()));
   }
 }
 
