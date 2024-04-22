@@ -14,7 +14,11 @@
 #ifndef LLVM_IR_STRUCTURALHASH_H
 #define LLVM_IR_STRUCTURALHASH_H
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/MapVector.h"
+#include "llvm/IR/Instructions.h"
 #include <cstdint>
+#include <functional>
 
 namespace llvm {
 
@@ -22,6 +26,10 @@ class Function;
 class Module;
 
 using IRHash = uint64_t;
+using EligibilityFunction = std::function<bool(const Instruction &, unsigned)>;
+using IndexInstructionMap = MapVector<unsigned, const Instruction *>;
+using IndexPairOperandHashMap =
+    DenseMap<std::pair<unsigned, unsigned>, uint64_t>;
 
 /// Returns a hash of the function \p F.
 /// \param F The function to hash.
@@ -36,6 +44,9 @@ IRHash StructuralHash(const Function &F, bool DetailedHash = false);
 /// composed the module hash.
 IRHash StructuralHash(const Module &M, bool DetailedHash = false);
 
+std::tuple<IRHash, std::unique_ptr<IndexInstructionMap>,
+           std::unique_ptr<IndexPairOperandHashMap>>
+StructuralHash(const Module &M, EligibilityFunction isEligible);
 } // end namespace llvm
 
 #endif

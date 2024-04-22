@@ -14,6 +14,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include <tuple>
 
 using namespace llvm;
 
@@ -24,7 +25,7 @@ namespace {
 // by the MergeFunctions pass.
 
 class StructuralHashImpl {
-  uint64_t Hash;
+  uint64_t Hash{4};
 
   void hash(uint64_t V) { Hash = hashing::detail::hash_16_bytes(Hash, V); }
 
@@ -42,26 +43,55 @@ class StructuralHashImpl {
       hash(ValueType->getIntegerBitWidth());
   }
 
-public:
-  StructuralHashImpl() : Hash(4) {}
+  uint64_t hash(uint64_t V, uint64_t Hash) {
+    return hashing::detail::hash_16_bytes(Hash, V);
+  }
 
-  void updateOperand(Value *Operand) {
-    hashType(Operand->getType());
+  // This will produce different values on 32-bit and 64-bit systens as
+  // hash_combine returns a size_t. However, this is only used for
+  // detailed hashing which, in-tree, only needs to distinguish between
+  // differences in functions.
+  template <typename T> uint64_t hashArbitaryType(const T &V, uint64_t Hash) {
+    return hash(hash_combine(V), Hash);
+  }
+
+  uint64_t hashType(Type *ValueType, uint64_t Hash) {
+    Hash = hash(ValueType->getTypeID(), Hash);
+    if (ValueType->isIntegerTy())
+      Hash = hash(ValueType->getIntegerBitWidth(), Hash);
+    return Hash;
+  }
+
+public:
+  EligibilityFunction IsEligible = nullptr;
+  std::unique_ptr<IndexInstructionMap> IndexInstruction;
+  std::unique_ptr<IndexPairOperandHashMap> IndexPairOperandHash;
+
+  StructuralHashImpl() = default;
+
+  StructuralHashImpl(EligibilityFunction IsEligible)
+      : IsEligible(IsEligible),
+        IndexInstruction(std::make_unique<IndexInstructionMap>()),
+        IndexPairOperandHash(std::make_unique<IndexPairOperandHashMap>()) {}
+
+  uint64_t updateOperand(Value *Operand, uint64_t Hash) {
+    Hash = hashType(Operand->getType(), Hash);
 
     // The cases enumerated below are not exhaustive and are only aimed to
     // get decent coverage over the function.
     if (ConstantInt *ConstInt = dyn_cast<ConstantInt>(Operand)) {
-      hashArbitaryType(ConstInt->getValue());
+      Hash = hashArbitaryType(ConstInt->getValue(), Hash);
     } else if (ConstantFP *ConstFP = dyn_cast<ConstantFP>(Operand)) {
-      hashArbitaryType(ConstFP->getValue());
+      Hash = hashArbitaryType(ConstFP->getValue(), Hash);
     } else if (Argument *Arg = dyn_cast<Argument>(Operand)) {
-      hash(Arg->getArgNo());
+      Hash = hash(Arg->getArgNo(), Hash);
     } else if (Function *Func = dyn_cast<Function>(Operand)) {
       // Hashing the name will be deterministic as LLVM's hashing infrastructure
       // has explicit support for hashing strings and will not simply hash
       // the pointer.
-      hashArbitaryType(Func->getName());
+      Hash = hashArbitaryType(Func->getName(), Hash);
     }
+    return Hash;
   }
 
   void updateInstruction(const Instruction &Inst, bool DetailedHash) {
@@ -77,8 +107,23 @@ public:
     if (const auto *ComparisonInstruction = dyn_cast<CmpInst>(&Inst))
       hash(ComparisonInstruction->getPredicate());
 
-    for (const auto &Op : Inst.operands())
-      updateOperand(Op);
+    unsigned InstIdx = 0;
+    if (IndexInstruction) {
+      InstIdx = IndexInstruction->size();
+      IndexInstruction->insert({InstIdx, &Inst});
+    }
+
+    unsigned OpndIdx = 0;
+    for (const auto &Op : Inst.operands()) {
+      uint64_t OpndHash = updateOperand(Op, 0);
+      if (IsEligible && IsEligible(Inst, OpndIdx)) {
+        assert(IndexPairOperandHash);
+        IndexPairOperandHash->insert({{InstIdx, OpndIdx}, OpndHash});
+      } else {
+        hash(OpndHash);
+      }
+      ++OpndIdx;
+    }
   }
 
   // A function hash is calculated by considering only the number of arguments
@@ -163,4 +208,13 @@ IRHash llvm::StructuralHash(const Module &M, bool DetailedHash) {
   StructuralHashImpl H;
   H.update(M, DetailedHash);
   return H.getHash();
+}
+
+std::tuple<IRHash, std::unique_ptr<IndexInstructionMap>,
+           std::unique_ptr<IndexPairOperandHashMap>>
+llvm::StructuralHash(const Module &M, EligibilityFunction IsEligible) {
+  StructuralHashImpl H(IsEligible);
+  H.update(M, true);
+  return std::make_tuple(H.getHash(), std::move(H.IndexInstruction),
+                         std::move(H.IndexPairOperandHash));
 }
