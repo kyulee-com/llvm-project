@@ -40,17 +40,29 @@ IRHash StructuralHash(const Function &F, bool DetailedHash = false);
 /// composed the module hash.
 IRHash StructuralHash(const Module &M, bool DetailedHash = false);
 
-using InstructionIndexMap = MapVector<unsigned, Instruction *>;
+using InstructionIndexMap = MapVector<unsigned, const Instruction *>;
 using OperandHashMap = DenseMap<std::pair<unsigned, unsigned>, IRHash>;
 struct FunctionHashInfo {
   /// A hash value representing the structural content of the function
   IRHash FunctionHash;
   /// A mapping from instruction indices to instruction pointers
-  InstructionIndexMap InstrIndexMap;
+  std::unique_ptr<InstructionIndexMap> InstrIndexMap;
   /// A mapping from pairs of instruction indices and operand indices
   /// to the hashes of the operands. This can be used to analyze or
   /// reconstruct the differences in ignored operands
-  OperandHashMap OperandHashes;
+  std::unique_ptr<OperandHashMap> IndexPairOperandHash;
+
+  FunctionHashInfo(IRHash FuntionHash,
+                   std::unique_ptr<InstructionIndexMap> InstrIndexMap,
+                   std::unique_ptr<OperandHashMap> IndexPairOperandHash)
+      : FunctionHash(FuntionHash), InstrIndexMap(std::move(InstrIndexMap)),
+        IndexPairOperandHash(std::move(IndexPairOperandHash)) {}
+  // Disable copy operations
+  FunctionHashInfo(const FunctionHashInfo &) = delete;
+  FunctionHashInfo &operator=(const FunctionHashInfo &) = delete;
+  // Enable move operations
+  FunctionHashInfo(FunctionHashInfo &&) noexcept = default;
+  FunctionHashInfo &operator=(FunctionHashInfo &&) noexcept = default;
 };
 using IgnoreOperandFunc =
     std::function<bool(const Instruction *, const Value *)>;
@@ -66,7 +78,8 @@ using IgnoreOperandFunc =
 /// for the hash computation.
 /// \return A FunctionHashInfo structure
 
-FunctionHashInfo StructuralHash(const Function &F, IgnoreOperandFunc IgnoreOp);
+FunctionHashInfo StructuralHashWithDifferences(const Function &F,
+                                               IgnoreOperandFunc IgnoreOp);
 
 } // end namespace llvm
 

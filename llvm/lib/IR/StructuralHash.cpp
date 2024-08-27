@@ -28,6 +28,11 @@ class StructuralHashImpl {
 
   bool DetailedHash;
 
+  IgnoreOperandFunc IgnoreOp;
+
+  std::unique_ptr<InstructionIndexMap> InstrIndexMap = nullptr;
+  std::unique_ptr<OperandHashMap> IndexPairOperandHash = nullptr;
+
   DenseMap<const Value *, int> ValueToId;
 
   // This will produce different values on 32-bit and 64-bit systens as
@@ -94,7 +99,14 @@ class StructuralHashImpl {
 
 public:
   StructuralHashImpl() = delete;
-  explicit StructuralHashImpl(bool DetailedHash) : DetailedHash(DetailedHash) {}
+  explicit StructuralHashImpl(bool DetailedHash,
+                              IgnoreOperandFunc IgnoreOp = nullptr)
+      : DetailedHash(DetailedHash), IgnoreOp(IgnoreOp) {
+    if (IgnoreOp) {
+      InstrIndexMap = std::make_unique<InstructionIndexMap>();
+      IndexPairOperandHash = std::make_unique<OperandHashMap>();
+    }
+  }
 
   // hash_value for APInt should be stable
   stable_hash hashAPInt(const APInt &I) { return hash_value(I); }
@@ -298,9 +310,20 @@ public:
     if (const auto *ComparisonInstruction = dyn_cast<CmpInst>(&Inst))
       Hashes.emplace_back(ComparisonInstruction->getPredicate());
 
-    for (const auto &Op : Inst.operands()) {
+    unsigned InstIdx = 0;
+    if (InstrIndexMap) {
+      InstIdx = InstrIndexMap->size();
+      InstrIndexMap->insert({InstIdx, &Inst});
+    }
+
+    for (unsigned OpndIdx = 0; OpndIdx < Inst.getNumOperands(); ++OpndIdx) {
+      auto *Op = Inst.getOperand(OpndIdx);
       auto OpndHash = hashOperand(Op);
-      Hashes.emplace_back(OpndHash);
+      if (IgnoreOp && IgnoreOp(&Inst, Op)) {
+        assert(IndexPairOperandHash);
+        IndexPairOperandHash->insert({{InstIdx, OpndIdx}, OpndHash});
+      } else
+        Hashes.emplace_back(OpndHash);
     }
 
     return stable_hash_combine(Hashes);
@@ -384,6 +407,12 @@ public:
   }
 
   uint64_t getHash() const { return Hash; }
+  std::unique_ptr<InstructionIndexMap> getIndexInstructionMap() {
+    return std::move(InstrIndexMap);
+  }
+  std::unique_ptr<OperandHashMap> getOperandHashMap() {
+    return std::move(IndexPairOperandHash);
+  }
 };
 
 } // namespace
@@ -400,6 +429,11 @@ IRHash llvm::StructuralHash(const Module &M, bool DetailedHash) {
   return H.getHash();
 }
 
-FunctionHashInfo StructuralHash(const Function &F, IgnoreOperandFunc IgnoreOp) {
-  return FunctionHashInfo();
+FunctionHashInfo
+llvm::StructuralHashWithDifferences(const Function &F,
+                                    IgnoreOperandFunc IgnoreOp) {
+  StructuralHashImpl H(/*DetailedHash=*/true, IgnoreOp);
+  H.update(F);
+  return FunctionHashInfo(H.getHash(), H.getIndexInstructionMap(),
+                          H.getOperandHashMap());
 }
