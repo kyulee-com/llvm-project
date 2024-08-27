@@ -254,7 +254,7 @@ TEST(StructuralHashTest, IgnoreCallTarget) {
                    "  ret float %b\n"
                    "}\n"
                    "declare float @llvm.cos.f32(float)\n");
-  auto IgnoreCallTarget = [](const Instruction *I, const Value *Op) {
+  auto ignoreCallTarget = [](const Instruction *I, unsigned OpndIdx) {
     bool Ignore = false;
     // Tracking a call instruction
     switch (I->getOpcode()) {
@@ -268,6 +268,8 @@ TEST(StructuralHashTest, IgnoreCallTarget) {
       return false;
 
     // Tracking a constant operand
+    assert(OpndIdx < I->getNumOperands() && "Invalid operand index");
+    auto Op = I->getOperand(OpndIdx);
     if (isa<Constant>(Op))
       return true;
 
@@ -275,31 +277,31 @@ TEST(StructuralHashTest, IgnoreCallTarget) {
   };
 
   auto FI1 =
-      StructuralHashWithDifferences(*M1->getFunction("f"), IgnoreCallTarget);
+      StructuralHashWithDifferences(*M1->getFunction("f"), ignoreCallTarget);
   auto FI2 =
-      StructuralHashWithDifferences(*M2->getFunction("f"), IgnoreCallTarget);
+      StructuralHashWithDifferences(*M2->getFunction("f"), ignoreCallTarget);
 
   // The combined hashes are identical because the call target was ignored.
   EXPECT_EQ(FI1.FunctionHash, FI2.FunctionHash);
   // There are a total of 2 instructions: 'call' and 'ret'.
-  EXPECT_EQ(FI1.InstrIndexMap->size(), 2u);
-  EXPECT_EQ(FI2.InstrIndexMap->size(), 2u);
+  EXPECT_EQ(FI1.IndexInstructionMap->size(), 2u);
+  EXPECT_EQ(FI2.IndexInstructionMap->size(), 2u);
   // Only 1 constant operand is ignored.
-  EXPECT_EQ(FI1.IndexPairOperandHash->size(), 1u);
-  EXPECT_EQ(FI2.IndexPairOperandHash->size(), 1u);
+  EXPECT_EQ(FI1.IndexPairOperandHashMap->size(), 1u);
+  EXPECT_EQ(FI2.IndexPairOperandHashMap->size(), 1u);
   // The index pair of the constant operand is the same in both cases.
-  EXPECT_EQ(FI1.IndexPairOperandHash->begin()->first,
-            FI2.IndexPairOperandHash->begin()->first);
+  EXPECT_EQ(FI1.IndexPairOperandHashMap->begin()->first,
+            FI2.IndexPairOperandHashMap->begin()->first);
   // The values (operand hashes) are different.
-  EXPECT_NE(FI1.IndexPairOperandHash->begin()->second,
-            FI2.IndexPairOperandHash->begin()->second);
+  EXPECT_NE(FI1.IndexPairOperandHashMap->begin()->second,
+            FI2.IndexPairOperandHashMap->begin()->second);
 
   // Check the different operands
   auto checkFirstOpnd = [&](FunctionHashInfo &FI, StringRef ExpectedOpndStr) {
     std::string OpndStr;
     raw_string_ostream OS(OpndStr);
-    auto [InstIdx, OpndIdx] = FI.IndexPairOperandHash->begin()->first;
-    (*FI.InstrIndexMap)[InstIdx]->getOperand(OpndIdx)->printAsOperand(
+    auto [InstIdx, OpndIdx] = FI.IndexPairOperandHashMap->begin()->first;
+    (*FI.IndexInstructionMap)[InstIdx]->getOperand(OpndIdx)->printAsOperand(
         OS, /*PrintType=*/false);
     EXPECT_EQ(OpndStr, ExpectedOpndStr);
   };

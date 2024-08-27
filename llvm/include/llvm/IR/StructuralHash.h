@@ -40,23 +40,26 @@ IRHash StructuralHash(const Function &F, bool DetailedHash = false);
 /// composed the module hash.
 IRHash StructuralHash(const Module &M, bool DetailedHash = false);
 
-using InstructionIndexMap = MapVector<unsigned, const Instruction *>;
-using OperandHashMap = DenseMap<std::pair<unsigned, unsigned>, IRHash>;
+using IndexInstructionMapType = MapVector<unsigned, Instruction *>;
+using IndexPairOperandHashMapType =
+    DenseMap<std::pair<unsigned, unsigned>, IRHash>;
 struct FunctionHashInfo {
   /// A hash value representing the structural content of the function
   IRHash FunctionHash;
   /// A mapping from instruction indices to instruction pointers
-  std::unique_ptr<InstructionIndexMap> InstrIndexMap;
+  std::unique_ptr<IndexInstructionMapType> IndexInstructionMap;
   /// A mapping from pairs of instruction indices and operand indices
   /// to the hashes of the operands. This can be used to analyze or
   /// reconstruct the differences in ignored operands
-  std::unique_ptr<OperandHashMap> IndexPairOperandHash;
+  std::unique_ptr<IndexPairOperandHashMapType> IndexPairOperandHashMap;
 
-  FunctionHashInfo(IRHash FuntionHash,
-                   std::unique_ptr<InstructionIndexMap> InstrIndexMap,
-                   std::unique_ptr<OperandHashMap> IndexPairOperandHash)
-      : FunctionHash(FuntionHash), InstrIndexMap(std::move(InstrIndexMap)),
-        IndexPairOperandHash(std::move(IndexPairOperandHash)) {}
+  FunctionHashInfo(
+      IRHash FuntionHash,
+      std::unique_ptr<IndexInstructionMapType> IndexInstructionMap,
+      std::unique_ptr<IndexPairOperandHashMapType> IndexPairOperandHashMap)
+      : FunctionHash(FuntionHash),
+        IndexInstructionMap(std::move(IndexInstructionMap)),
+        IndexPairOperandHashMap(std::move(IndexPairOperandHashMap)) {}
   // Disable copy operations
   FunctionHashInfo(const FunctionHashInfo &) = delete;
   FunctionHashInfo &operator=(const FunctionHashInfo &) = delete;
@@ -65,7 +68,7 @@ struct FunctionHashInfo {
   FunctionHashInfo &operator=(FunctionHashInfo &&) noexcept = default;
 };
 using IgnoreOperandFunc =
-    std::function<bool(const Instruction *, const Value *)>;
+    std::function<bool(const Instruction *, unsigned OpndIdx)>;
 
 /// Computes a structural hash of a given function, considering the structure
 /// and content of the function's instructions while allowing for selective

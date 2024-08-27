@@ -30,8 +30,9 @@ class StructuralHashImpl {
 
   IgnoreOperandFunc IgnoreOp;
 
-  std::unique_ptr<InstructionIndexMap> InstrIndexMap = nullptr;
-  std::unique_ptr<OperandHashMap> IndexPairOperandHash = nullptr;
+  std::unique_ptr<IndexInstructionMapType> IndexInstructionMap = nullptr;
+  std::unique_ptr<IndexPairOperandHashMapType> IndexPairOperandHashMap =
+      nullptr;
 
   DenseMap<const Value *, int> ValueToId;
 
@@ -103,8 +104,8 @@ public:
                               IgnoreOperandFunc IgnoreOp = nullptr)
       : DetailedHash(DetailedHash), IgnoreOp(IgnoreOp) {
     if (IgnoreOp) {
-      InstrIndexMap = std::make_unique<InstructionIndexMap>();
-      IndexPairOperandHash = std::make_unique<OperandHashMap>();
+      IndexInstructionMap = std::make_unique<IndexInstructionMapType>();
+      IndexPairOperandHashMap = std::make_unique<IndexPairOperandHashMapType>();
     }
   }
 
@@ -139,11 +140,13 @@ public:
     auto Name = GV->getName();
     // Use the content hash of the outlined function.
     auto [P0, S0] = Name.rsplit(".content.");
-    // Ignore the uniquing/llvm suffix.
-    auto [P1, S1] = S0.rsplit(".llvm.");
-    auto [P2, S2] = P1.rsplit(".__uniq.");
-
-    Hashes.emplace_back(xxh3_64bits(P2));
+    if (!S0.empty())
+      Hashes.emplace_back(xxh3_64bits(P0));
+    else {
+      auto [P1, S1] = Name.rsplit(".llvm.");
+      auto [P2, S2] = P1.rsplit(".__uniq.");
+      Hashes.emplace_back(xxh3_64bits(P2));
+    }
     return stable_hash_combine(Hashes);
   }
 
@@ -311,17 +314,17 @@ public:
       Hashes.emplace_back(ComparisonInstruction->getPredicate());
 
     unsigned InstIdx = 0;
-    if (InstrIndexMap) {
-      InstIdx = InstrIndexMap->size();
-      InstrIndexMap->insert({InstIdx, &Inst});
+    if (IndexInstructionMap) {
+      InstIdx = IndexInstructionMap->size();
+      IndexInstructionMap->insert({InstIdx, const_cast<Instruction *>(&Inst)});
     }
 
     for (unsigned OpndIdx = 0; OpndIdx < Inst.getNumOperands(); ++OpndIdx) {
       auto *Op = Inst.getOperand(OpndIdx);
       auto OpndHash = hashOperand(Op);
-      if (IgnoreOp && IgnoreOp(&Inst, Op)) {
-        assert(IndexPairOperandHash);
-        IndexPairOperandHash->insert({{InstIdx, OpndIdx}, OpndHash});
+      if (IgnoreOp && IgnoreOp(&Inst, OpndIdx)) {
+        assert(IndexPairOperandHashMap);
+        IndexPairOperandHashMap->insert({{InstIdx, OpndIdx}, OpndHash});
       } else
         Hashes.emplace_back(OpndHash);
     }
@@ -407,11 +410,11 @@ public:
   }
 
   uint64_t getHash() const { return Hash; }
-  std::unique_ptr<InstructionIndexMap> getIndexInstructionMap() {
-    return std::move(InstrIndexMap);
+  std::unique_ptr<IndexInstructionMapType> getIndexInstructionMap() {
+    return std::move(IndexInstructionMap);
   }
-  std::unique_ptr<OperandHashMap> getOperandHashMap() {
-    return std::move(IndexPairOperandHash);
+  std::unique_ptr<IndexPairOperandHashMapType> getIndexPairOperandHashMap() {
+    return std::move(IndexPairOperandHashMap);
   }
 };
 
@@ -435,5 +438,5 @@ llvm::StructuralHashWithDifferences(const Function &F,
   StructuralHashImpl H(/*DetailedHash=*/true, IgnoreOp);
   H.update(F);
   return FunctionHashInfo(H.getHash(), H.getIndexInstructionMap(),
-                          H.getOperandHashMap());
+                          H.getIndexPairOperandHashMap());
 }
