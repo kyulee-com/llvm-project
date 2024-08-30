@@ -275,6 +275,8 @@ Expected<stable_hash> mergeCodeGenData(ArrayRef<StringRef> ObjFiles) {
       return E;
   }
 
+  GlobalStableFunctionMapRecord.finalize();
+
   if (!GlobalOutlineRecord.empty())
     cgdata::publishOutlinedHashTree(std::move(GlobalOutlineRecord.HashTree));
   if (!GlobalStableFunctionMapRecord.empty())

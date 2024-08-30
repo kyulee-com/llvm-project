@@ -14,6 +14,7 @@
 #define LLVM_CGDATA_STABLEFUNCTIONMAP_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StableHashing.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/IR/StructuralHash.h"
@@ -42,8 +43,8 @@ struct StableFunction {
   /// A vector of pairs of IndexPair and operand hash which was skipped.
   IndexOperandHashVecType IndexOperandHashes;
 
-  StableFunction(stable_hash Hash, std::string FunctionName,
-                 std::string ModuleName, unsigned InstCount,
+  StableFunction(stable_hash Hash, const std::string FunctionName,
+                 const std::string ModuleName, unsigned InstCount,
                  IndexOperandHashVecType &&IndexOperandHashes)
       : Hash(Hash), FunctionName(FunctionName), ModuleName(ModuleName),
         InstCount(InstCount),
@@ -83,10 +84,12 @@ class StableFunctionMap {
   SmallVector<std::string> IdToName;
   /// A map from StringRef (name) to an ID.
   StringMap<unsigned> NameToId;
+  /// True if the function map is finalized with minimal content.
+  bool Finalized = false;
 
 public:
   /// Get the HashToFuncs map for serialization.
-  const HashFuncsMapType &getFunctionMap() { return HashToFuncs; }
+  const HashFuncsMapType &getFunctionMap() const { return HashToFuncs; }
 
   /// Get the NameToId vector for serialization.
   const SmallVector<std::string> getNames() { return IdToName; }
@@ -107,6 +110,7 @@ public:
   /// method assumes that string names have already been uniqued and the
   /// `StableFunctionEntry` is ready for insertion.
   void insert(std::unique_ptr<StableFunctionEntry> FuncEntry) {
+    assert(!Finalized && "Cannot insert after finalization");
     HashToFuncs[FuncEntry->Hash].emplace_back(std::move(FuncEntry));
   }
 
@@ -126,6 +130,9 @@ public:
   /// \returns the size of StableFunctionMap.
   /// \p Type is the type of size to return.
   size_t size(SizeType Type = UniqueHashCount) const;
+
+  /// Finalize the stable function mape by trimming content.
+  bool finalize();
 };
 
 } // namespace llvm
