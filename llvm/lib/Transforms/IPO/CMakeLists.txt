@@ -21,6 +21,8 @@ add_llvm_component_library(LLVMipo
   GlobalDCE.cpp
   GlobalOpt.cpp
   GlobalSplit.cpp
+  GlobalMergeFunctions.cpp
+  GlobalMergeFunctionsIO.cpp
   HotColdSplitting.cpp
   IPO.cpp
   IROutliner.cpp

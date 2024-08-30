@@ -53,6 +53,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/IPO/GlobalMergeFunctions.h"
 #include "llvm/Transforms/IPO/MemProfContextDisambiguation.h"
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
@@ -1966,6 +1967,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
     return errorCodeToError(EC);
 
   // Create a scratch output.
+  beginBuildingHashFunction(); // TODO
   auto Outputs = std::make_unique<std::vector<llvm::SmallString<0>>>();
   Outputs->resize(getMaxTasks());
   auto FirstRoundLTO = std::make_unique<NoOutputThinBackend>(
@@ -1975,7 +1977,10 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   // Before codegen, we serilized modules to CodeGenDataThinLTOTwoRoundsPath.
   if (Error E = RunBackends(FirstRoundLTO.get()))
     return E;
+  publishHashFunction();     // TODO
+  endBuildingHashFunction(); // TODO
 
+  beginUsingHashFunction(); // TODO
   // Using the scratch output, we merge codegen data.
   if (Error E = cgdata::mergeCodeGenData(std::move(FirstRoundLTO->Scratch)))
     return E;
@@ -1987,6 +1992,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
           Conf, ThinLTO.CombinedIndex, llvm::heavyweight_hardware_concurrency(),
           ModuleToDefinedGVSummaries, AddStream);
   Error E = RunBackends(SecondRoundLTO.get());
+  endUsingHashFunction(); // TODO
 
   return E;
 }
