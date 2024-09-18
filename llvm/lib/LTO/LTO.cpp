@@ -1595,6 +1595,7 @@ public:
 /// first round. The backend then executes the codegen only to further optimize
 /// the code, utilizing the codegen data merged from the first round. Finally,
 /// it writes the resulting object files as usual.
+/// Test comments for thin5.
 class SecondRoundThinBackend : public InProcessThinBackend {
 public:
   SecondRoundThinBackend(
