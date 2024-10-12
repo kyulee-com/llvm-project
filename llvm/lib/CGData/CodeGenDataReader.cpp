@@ -39,6 +39,34 @@ Error CodeGenDataReader::mergeFromObjectFile(
       getCodeGenDataSectionName(CG_outline, TT.getObjectFormat(), false);
   auto CGMergeName =
       getCodeGenDataSectionName(CG_merge, TT.getObjectFormat(), false);
+
+  auto processSectionContents = [&](const StringRef &Name,
+                                    const StringRef &Contents) {
+    if (Name != CGOutLineName && Name != CGMergeName)
+      return;
+    if (CombinedHash)
+      *CombinedHash = stable_hash_combine(*CombinedHash, xxh3_64bits(Contents));
+    auto *Data = reinterpret_cast<const unsigned char *>(Contents.data());
+    auto *EndData = Data + Contents.size();
+    // In case dealing with an executable that has concatenated cgdata,
+    // we want to merge them into a single cgdata.
+    // Although it's not a typical workflow, we support this scenario
+    // by looping over all data in the sections.
+    if (Name == CGOutLineName) {
+      while (Data != EndData) {
+        OutlinedHashTreeRecord LocalOutlineRecord;
+        LocalOutlineRecord.deserialize(Data);
+        GlobalOutlineRecord.merge(LocalOutlineRecord);
+      }
+    } else if (Name == CGMergeName) {
+      while (Data != EndData) {
+        StableFunctionMapRecord LocalFunctionMapRecord;
+        LocalFunctionMapRecord.deserialize(Data);
+        GlobalFunctionMapRecord.merge(LocalFunctionMapRecord);
+      }
+    }
+  };
+
   for (auto &Section : Obj->sections()) {
     Expected<StringRef> NameOrErr = Section.getName();
     if (!NameOrErr)
@@ -46,38 +74,7 @@ Error CodeGenDataReader::mergeFromObjectFile(
     Expected<StringRef> ContentsOrErr = Section.getContents();
     if (!ContentsOrErr)
       return ContentsOrErr.takeError();
-    auto *Data = reinterpret_cast<const unsigned char *>(ContentsOrErr->data());
-    auto *EndData = Data + ContentsOrErr->size();
-
-    // In case dealing with an executable that has concatenated cgdata,
-    // we want to merge them into a single cgdata.
-    // Although it's not a typical workflow, we support this scenario
-    // by looping over all data in the sections.
-    if (*NameOrErr == CGOutLineName) {
-      if (CombinedHash)
-        *CombinedHash =
-            stable_hash_combine(*CombinedHash, xxh3_64bits(*ContentsOrErr));
-      // In case dealing with an executable that has concatenated cgdata,
-      // we want to merge them into a single cgdata.
-      // Although it's not a typical workflow, we support this scenario.
-      while (Data != EndData) {
-        OutlinedHashTreeRecord LocalOutlineRecord;
-        LocalOutlineRecord.deserialize(Data);
-        GlobalOutlineRecord.merge(LocalOutlineRecord);
-      }
-    } else if (*NameOrErr == CGMergeName) {
-      if (CombinedHash)
-        *CombinedHash =
-            stable_hash_combine(*CombinedHash, xxh3_64bits(*ContentsOrErr));
-      // In case dealing with an executable that has concatenated cgdata,
-      // we want to merge them into a single cgdata.
-      // Although it's not a typical workflow, we support this scenario.
-      while (Data != EndData) {
-        StableFunctionMapRecord LocalFunctionMapRecord;
-        LocalFunctionMapRecord.deserialize(Data);
-        GlobalFunctionMapRecord.merge(LocalFunctionMapRecord);
-      }
-    }
+    processSectionContents(*NameOrErr, *ContentsOrErr);
   }
 
   return Error::success();
