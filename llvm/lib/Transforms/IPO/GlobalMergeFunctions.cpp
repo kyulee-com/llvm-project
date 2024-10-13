@@ -6,45 +6,30 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This implements a function merge using function hash. Like the pika merge
-// functions, this can merge functions that differ by Constant operands thru
-// parameterizing them. However, instead of directly comparing IR functions,
-// this uses stable function hash to find potential merge candidates.
-// This provides a flexible framework to implement a global function merge with
-// ThinLTO two-codegen rounds. The first codegen round collects stable function
-// hashes, and determines the merge candidates that match the stable function
-// hashes. The set of parameters pointing to different Constants are also
-// computed during the stable function merge. The second codegen round uses this
-// global function info to optimistically create a merged function in each
-// module context to guarantee correct transformation. Similar to the global
-// outliner, the linker's deduplication (ICF) folds the identical merged
-// functions to save the final binary size.
+// TODO: This implements a function merge using function hash while tracking
+// differences in Constants. This uses stable function hash to find potential
+// merge candidates. The first codegen round collects stable function hashes,
+// and determines the merge candidates that match the stable function hashes.
+// The set of parameters pointing to different Constants are also computed
+// during the stable function merge. The second codegen round uses this global
+// function info to optimistically create a merged function in each module
+// context to guarantee correct transformation. Similar to the global outliner,
+// the linker's deduplication (ICF) folds the identical merged functions to save
+// the final binary size.
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/GlobalMergeFunctions.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/StableHashing.h"
 #include "llvm/ADT/Statistic.h"
-#include "llvm/ADT/Twine.h"
 #include "llvm/CGData/CodeGenData.h"
 #include "llvm/CGData/StableFunctionMap.h"
 #include "llvm/CodeGen/MachineStableHash.h"
 #include "llvm/CodeGen/Passes.h"
-#include "llvm/IR/DiagnosticInfo.h"
-#include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/StructuralHash.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/CommandLine.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
-#include <functional>
-#include <tuple>
-#include <vector>
 
 #define DEBUG_TYPE "global-merge-func"
 
@@ -55,54 +40,20 @@ cl::opt<bool> EnableGlobalMergeFunc(
     "enable-global-merge-func", cl::init(false), cl::Hidden,
     cl::desc("enable global merge functions (default = off)"));
 
-cl::opt<unsigned> GlobalMergeExtraThreshold(
-    "globalmergefunc-extra-threshold",
-    cl::desc("An extra cost threshold for merging. '0' disables the extra cost "
-             "and benefit analysis."),
-    cl::init(0), cl::Hidden);
-
-cl::opt<bool> DisableCrossModuleGlobalMergeFunc(
-    "disable-cross-module-global-merge-func", cl::init(false), cl::Hidden,
-    cl::desc("disable cross-module global merge functions. When this flag is "
-             "true, only local functions are merged by global merge func."));
-
 STATISTIC(NumMismatchedFunctionHashGlobalMergeFunction,
           "Number of mismatched function hash for global merge function");
 STATISTIC(NumMismatchedInstCountGlobalMergeFunction,
           "Number of mismatched instruction count for global merge function");
 STATISTIC(NumMismatchedConstHashGlobalMergeFunction,
           "Number of mismatched const hash for global merge function");
-STATISTIC(NumMismatchedIRGlobalMergeFunction,
-          "Number of mismatched IR for global merge function");
 STATISTIC(NumMismatchedModuleIdGlobalMergeFunction,
           "Number of mismatched Module Id for global merge function");
-STATISTIC(
-    NumMismatchedGlobalMergeFunctionCandidates,
-    "Number of mismatched global merge function candidates that are skipped");
-STATISTIC(NumGlobalMergeFunctionCandidates,
-          "Number of global merge function candidates");
-STATISTIC(NumCrossModuleGlobalMergeFunctionCandidates,
-          "Number of cross-module global merge function candidates");
-STATISTIC(NumIdenticalGlobalMergeFunctionCandidates,
-          "Number of global merge function candidates that are identical (no "
-          "parameter)");
 STATISTIC(NumGlobalMergeFunctions,
           "Number of functions that are actually merged using function hash");
 STATISTIC(NumAnalyzedModues, "Number of modules that are analyzed");
 STATISTIC(NumAnalyzedFunctions, "Number of functions that are analyzed");
 STATISTIC(NumEligibleFunctions, "Number of functions that are eligible");
 
-// A singleton context for diagnostic output.
-static LLVMContext Ctx;
-class GlobalMergeFuncDiagnosticInfo : public DiagnosticInfo {
-  const Twine &Msg;
-
-public:
-  GlobalMergeFuncDiagnosticInfo(const Twine &DiagMsg,
-                                DiagnosticSeverity Severity = DS_Error)
-      : DiagnosticInfo(DK_Linker, Severity), Msg(DiagMsg) {}
-  void print(DiagnosticPrinter &DP) const override { DP << Msg; }
-};
 
 /// Returns true if the \opIdx operand of \p CI is the callee operand.
 static bool isCalleeOperand(const CallBase *CI, unsigned opIdx) {
@@ -408,13 +359,11 @@ static void createThunk(FuncMergeInfo &FI, ArrayRef<Constant *> Params,
 
 // Check if the old merged/optimized IndexOperandHashMap is compatible with
 // the current IndexOperandHashMap. OpndHash may not be stable across
-// different builds due to varying modules combined. To address this, one
-// solution could be to relax the hash computation for Const in
-// PikaFunctionHash. However, instead of doing so, we relax the hash check
-// condition by comparing Const hash patterns instead of absolute hash values.
-// For example, let's assume we have three Consts located at idx1, idx3, and
-// idx6, where their corresponding hashes are hash1, hash2, and hash1 in the old
-// merged map below:
+// different builds due to varying modules combined. To address this, we relax
+// the hash check condition by comparing Const hash patterns instead of absolute
+// hash values. For example, let's assume we have three Consts located at idx1,
+// idx3, and idx6, where their corresponding hashes are hash1, hash2, and hash1
+// in the old merged map below:
 //   Old (Merged): [(idx1, hash1), (idx3, hash2), (idx6, hash1)]
 //   Current: [(idx1, hash1'), (idx3, hash2'), (idx6, hash1')]
 // If the current function also has three Consts in the same locations,
@@ -682,25 +631,22 @@ void GlobalMergeFunc::initializeMergerMode(const Module &M) {
 }
 
 void GlobalMergeFunc::emitFunctionMap(Module &M) {
-  if (!LocalFunctionMap->empty()) {
-    LLVM_DEBUG({
-      dbgs() << "Emit function map. Size: " << LocalFunctionMap->size() << "\n";
-    });
-    SmallVector<char> Buf;
-    raw_svector_ostream OS(Buf);
+  LLVM_DEBUG({
+    dbgs() << "Emit function map. Size: " << LocalFunctionMap->size() << "\n";
+  });
+  SmallVector<char> Buf;
+  raw_svector_ostream OS(Buf);
 
-    StableFunctionMapRecord SFR(std::move(LocalFunctionMap));
-    SFR.serialize(OS);
+  StableFunctionMapRecord SFR(std::move(LocalFunctionMap));
+  SFR.serialize(OS);
 
-    llvm::StringRef Data(Buf.data(), Buf.size());
-    std::unique_ptr<MemoryBuffer> Buffer = MemoryBuffer::getMemBuffer(
-        Data, "in-memory stable function map", false);
+  std::unique_ptr<MemoryBuffer> Buffer = MemoryBuffer::getMemBuffer(
+      OS.str(), "in-memory stable function map", false);
 
-    Triple TT(M.getTargetTriple());
-    embedBufferInModule(
-        M, *Buffer.get(),
-        getCodeGenDataSectionName(CG_merge, TT.getObjectFormat()), Align(4));
-  }
+  Triple TT(M.getTargetTriple());
+  embedBufferInModule(M, *Buffer.get(),
+                      getCodeGenDataSectionName(CG_merge, TT.getObjectFormat()),
+                      Align(4));
 }
 
 bool GlobalMergeFunc::runOnModule(Module &M) {
@@ -710,7 +656,8 @@ bool GlobalMergeFunc::runOnModule(Module &M) {
   switch (MergerMode) {
   case HashFunctionMode::BuildingHashFuncion: {
     analyze(M);
-    emitFunctionMap(M);
+    if (!LocalFunctionMap->empty())
+      emitFunctionMap(M);
     break;
   }
   case HashFunctionMode::UsingHashFunction: {
