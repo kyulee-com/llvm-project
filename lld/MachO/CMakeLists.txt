@@ -41,6 +41,7 @@ add_lld_library(lldMachO
   BitReader
   BitWriter
   CGData
+  CodeGen
   Core
   DebugInfoDWARF
   Demangle

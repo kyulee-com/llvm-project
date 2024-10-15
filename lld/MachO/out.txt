@@ -1,0 +1,1391 @@
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    1) //===- Writer.cpp ---------------------------------------------------------===//
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    2) //
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    3) // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    4) // See https://llvm.org/LICENSE.txt for license information.
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    5) // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    6) //
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    7) //===----------------------------------------------------------------------===//
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    8) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700    9) #include "Writer.h"
+33706191d88d3 (Jez Ng                 2021-05-25 14:57:16 -0400   10) #include "ConcatOutputSection.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   11) #include "Config.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   12) #include "InputFiles.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   13) #include "InputSection.h"
+ed8bff13dcaa1 (caoming.roy            2021-03-18 10:38:30 -0400   14) #include "MapFile.h"
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700   15) #include "OutputSection.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   16) #include "OutputSegment.h"
+f23d57a632663 (Leonard Grey           2022-01-24 16:51:51 -0500   17) #include "SectionPriorities.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   18) #include "SymbolTable.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   19) #include "Symbols.h"
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700   20) #include "SyntheticSections.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   21) #include "Target.h"
+2124ca1d5cb67 (Greg McGary            2020-08-20 13:05:13 -0700   22) #include "UnwindInfoSection.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   23) 
+9b6dde8af8f08 (Jez Ng                 2021-03-31 15:48:18 -0400   24) #include "lld/Common/Arrays.h"
+83d59e05b2017 (Alexandre Ganea        2022-01-20 14:53:18 -0500   25) #include "lld/Common/CommonLinkerContext.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   26) #include "llvm/BinaryFormat/MachO.h"
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700   27) #include "llvm/Config/llvm-config.h"
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700   28) #include "llvm/Support/LEB128.h"
+9b6dde8af8f08 (Jez Ng                 2021-03-31 15:48:18 -0400   29) #include "llvm/Support/Parallel.h"
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700   30) #include "llvm/Support/Path.h"
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400   31) #include "llvm/Support/TimeProfiler.h"
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200   32) #include "llvm/Support/thread.h"
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500   33) #include "llvm/Support/xxhash.h"
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   34) 
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700   35) #include <algorithm>
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700   36) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   37) using namespace llvm;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   38) using namespace llvm::MachO;
+64e4757200202 (Jez Ng                 2020-12-18 17:58:07 -0500   39) using namespace llvm::sys;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   40) using namespace lld;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   41) using namespace lld::macho;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   42) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   43) namespace {
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700   44) class LCUuid;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   45) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   46) class Writer {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   47) public:
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   48)   Writer() : buffer(errorHandler().outputBuffer) {}
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   49) 
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400   50)   void treatSpecialUndefineds();
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700   51)   void scanRelocations();
+4c8276cdc120c (Jez Ng                 2020-12-16 19:14:57 -0500   52)   void scanSymbols();
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400   53)   template <class LP> void createOutputSections();
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400   54)   template <class LP> void createLoadCommands();
+d9065fe8ea643 (Jez Ng                 2021-04-07 19:55:45 -0400   55)   void finalizeAddresses();
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700   56)   void finalizeLinkEditSegment();
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700   57)   void assignAddresses(OutputSegment *);
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700   58) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   59)   void openFile();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   60)   void writeSections();
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200   61)   void applyOptimizationHints();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200   62)   void buildFixupChains();
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700   63)   void writeUuid();
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800   64)   void writeCodeSignature();
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400   65)   void writeOutputFile();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   66) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400   67)   template <class LP> void run();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   68) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   69)   std::unique_ptr<FileOutputBuffer> &buffer;
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700   70)   uint64_t addr = 0;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700   71)   uint64_t fileOff = 0;
+3587de2281986 (Jez Ng                 2020-07-30 14:28:41 -0700   72)   MachHeaderSection *header = nullptr;
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700   73)   StringTableSection *stringTableSection = nullptr;
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700   74)   SymtabSection *symtabSection = nullptr;
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700   75)   IndirectSymtabSection *indirectSymtabSection = nullptr;
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800   76)   CodeSignatureSection *codeSignatureSection = nullptr;
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700   77)   DataInCodeSection *dataInCodeSection = nullptr;
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400   78)   FunctionStartsSection *functionStartsSection = nullptr;
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400   79) 
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700   80)   LCUuid *uuidCommand = nullptr;
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700   81)   OutputSegment *linkEditSegment = nullptr;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   82) };
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   83) 
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700   84) // LC_DYLD_INFO_ONLY stores the offsets of symbol import/export information.
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400   85) class LCDyldInfo final : public LoadCommand {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   86) public:
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700   87)   LCDyldInfo(RebaseSection *rebaseSection, BindingSection *bindingSection,
+cbe27316efce6 (Jez Ng                 2020-08-24 21:57:59 -0700   88)              WeakBindingSection *weakBindingSection,
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700   89)              LazyBindingSection *lazyBindingSection,
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700   90)              ExportSection *exportSection)
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700   91)       : rebaseSection(rebaseSection), bindingSection(bindingSection),
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700   92)         weakBindingSection(weakBindingSection),
+cbe27316efce6 (Jez Ng                 2020-08-24 21:57:59 -0700   93)         lazyBindingSection(lazyBindingSection), exportSection(exportSection) {}
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700   94) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   95)   uint32_t getSize() const override { return sizeof(dyld_info_command); }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   96) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   97)   void writeTo(uint8_t *buf) const override {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   98)     auto *c = reinterpret_cast<dyld_info_command *>(buf);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700   99)     c->cmd = LC_DYLD_INFO_ONLY;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  100)     c->cmdsize = getSize();
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700  101)     if (rebaseSection->isNeeded()) {
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700  102)       c->rebase_off = rebaseSection->fileOff;
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700  103)       c->rebase_size = rebaseSection->getFileSize();
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700  104)     }
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  105)     if (bindingSection->isNeeded()) {
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700  106)       c->bind_off = bindingSection->fileOff;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  107)       c->bind_size = bindingSection->getFileSize();
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  108)     }
+cbe27316efce6 (Jez Ng                 2020-08-24 21:57:59 -0700  109)     if (weakBindingSection->isNeeded()) {
+cbe27316efce6 (Jez Ng                 2020-08-24 21:57:59 -0700  110)       c->weak_bind_off = weakBindingSection->fileOff;
+cbe27316efce6 (Jez Ng                 2020-08-24 21:57:59 -0700  111)       c->weak_bind_size = weakBindingSection->getFileSize();
+cbe27316efce6 (Jez Ng                 2020-08-24 21:57:59 -0700  112)     }
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700  113)     if (lazyBindingSection->isNeeded()) {
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700  114)       c->lazy_bind_off = lazyBindingSection->fileOff;
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700  115)       c->lazy_bind_size = lazyBindingSection->getFileSize();
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700  116)     }
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  117)     if (exportSection->isNeeded()) {
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700  118)       c->export_off = exportSection->fileOff;
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  119)       c->export_size = exportSection->getFileSize();
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  120)     }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  121)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  122) 
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700  123)   RebaseSection *rebaseSection;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  124)   BindingSection *bindingSection;
+cbe27316efce6 (Jez Ng                 2020-08-24 21:57:59 -0700  125)   WeakBindingSection *weakBindingSection;
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700  126)   LazyBindingSection *lazyBindingSection;
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  127)   ExportSection *exportSection;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  128) };
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  129) 
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  130) class LCSubFramework final : public LoadCommand {
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  131) public:
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  132)   LCSubFramework(StringRef umbrella) : umbrella(umbrella) {}
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  133) 
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  134)   uint32_t getSize() const override {
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500  135)     return alignToPowerOf2(sizeof(sub_framework_command) + umbrella.size() + 1,
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500  136)                            target->wordSize);
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  137)   }
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  138) 
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  139)   void writeTo(uint8_t *buf) const override {
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  140)     auto *c = reinterpret_cast<sub_framework_command *>(buf);
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  141)     buf += sizeof(sub_framework_command);
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  142) 
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  143)     c->cmd = LC_SUB_FRAMEWORK;
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  144)     c->cmdsize = getSize();
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  145)     c->umbrella = sizeof(sub_framework_command);
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  146) 
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  147)     memcpy(buf, umbrella.data(), umbrella.size());
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  148)     buf[umbrella.size()] = '\0';
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  149)   }
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  150) 
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  151) private:
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  152)   const StringRef umbrella;
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  153) };
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  154) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  155) class LCFunctionStarts final : public LoadCommand {
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  156) public:
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400  157)   explicit LCFunctionStarts(FunctionStartsSection *functionStartsSection)
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400  158)       : functionStartsSection(functionStartsSection) {}
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  159) 
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  160)   uint32_t getSize() const override { return sizeof(linkedit_data_command); }
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  161) 
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  162)   void writeTo(uint8_t *buf) const override {
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  163)     auto *c = reinterpret_cast<linkedit_data_command *>(buf);
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  164)     c->cmd = LC_FUNCTION_STARTS;
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  165)     c->cmdsize = getSize();
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400  166)     c->dataoff = functionStartsSection->fileOff;
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400  167)     c->datasize = functionStartsSection->getFileSize();
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  168)   }
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  169) 
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  170) private:
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400  171)   FunctionStartsSection *functionStartsSection;
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  172) };
+9afdd3607a035 (Alexander Shaposhnikov 2021-03-08 22:00:37 -0800  173) 
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  174) class LCDataInCode final : public LoadCommand {
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  175) public:
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  176)   explicit LCDataInCode(DataInCodeSection *dataInCodeSection)
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  177)       : dataInCodeSection(dataInCodeSection) {}
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  178) 
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  179)   uint32_t getSize() const override { return sizeof(linkedit_data_command); }
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  180) 
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  181)   void writeTo(uint8_t *buf) const override {
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  182)     auto *c = reinterpret_cast<linkedit_data_command *>(buf);
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  183)     c->cmd = LC_DATA_IN_CODE;
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  184)     c->cmdsize = getSize();
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  185)     c->dataoff = dataInCodeSection->fileOff;
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  186)     c->datasize = dataInCodeSection->getFileSize();
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  187)   }
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  188) 
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  189) private:
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  190)   DataInCodeSection *dataInCodeSection;
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  191) };
+928394d10918c (Alexander Shaposhnikov 2021-06-14 19:21:43 -0700  192) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  193) class LCDysymtab final : public LoadCommand {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  194) public:
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  195)   LCDysymtab(SymtabSection *symtabSection,
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  196)              IndirectSymtabSection *indirectSymtabSection)
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  197)       : symtabSection(symtabSection),
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  198)         indirectSymtabSection(indirectSymtabSection) {}
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700  199) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  200)   uint32_t getSize() const override { return sizeof(dysymtab_command); }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  201) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  202)   void writeTo(uint8_t *buf) const override {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  203)     auto *c = reinterpret_cast<dysymtab_command *>(buf);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  204)     c->cmd = LC_DYSYMTAB;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  205)     c->cmdsize = getSize();
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  206) 
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  207)     c->ilocalsym = 0;
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  208)     c->iextdefsym = c->nlocalsym = symtabSection->getNumLocalSymbols();
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  209)     c->nextdefsym = symtabSection->getNumExternalSymbols();
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  210)     c->iundefsym = c->iextdefsym + c->nextdefsym;
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  211)     c->nundefsym = symtabSection->getNumUndefinedSymbols();
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  212) 
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700  213)     c->indirectsymoff = indirectSymtabSection->fileOff;
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700  214)     c->nindirectsyms = indirectSymtabSection->getNumSymbols();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  215)   }
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700  216) 
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  217)   SymtabSection *symtabSection;
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  218)   IndirectSymtabSection *indirectSymtabSection;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  219) };
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  220) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  221) template <class LP> class LCSegment final : public LoadCommand {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  222) public:
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  223)   LCSegment(StringRef name, OutputSegment *seg) : name(name), seg(seg) {}
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  224) 
+c318746345cc6 (Fangrui Song           2021-04-02 17:04:11 -0700  225)   uint32_t getSize() const override {
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  226)     return sizeof(typename LP::segment_command) +
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  227)            seg->numNonHiddenSections() * sizeof(typename LP::section);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  228)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  229) 
+c318746345cc6 (Fangrui Song           2021-04-02 17:04:11 -0700  230)   void writeTo(uint8_t *buf) const override {
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  231)     using SegmentCommand = typename LP::segment_command;
+3a1b3c9afe74e (Greg McGary            2021-11-04 20:55:31 -0700  232)     using SectionHeader = typename LP::section;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  233) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  234)     auto *c = reinterpret_cast<SegmentCommand *>(buf);
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  235)     buf += sizeof(SegmentCommand);
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  236) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  237)     c->cmd = LP::segmentLCType;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  238)     c->cmdsize = getSize();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  239)     memcpy(c->segname, name.data(), name.size());
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  240)     c->fileoff = seg->fileOff;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  241)     c->maxprot = seg->maxProt;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  242)     c->initprot = seg->initProt;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  243) 
+9482aa98e5514 (Nico Weber             2021-07-23 10:19:06 -0400  244)     c->vmaddr = seg->addr;
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400  245)     c->vmsize = seg->vmSize;
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400  246)     c->filesize = seg->fileSize;
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700  247)     c->nsects = seg->numNonHiddenSections();
+f7b752d27766e (Daniel Bertalan        2022-08-31 12:32:21 +0200  248)     c->flags = seg->flags;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  249) 
+98fe9e41f7a61 (Greg McGary            2021-03-09 21:41:34 -0800  250)     for (const OutputSection *osec : seg->getSections()) {
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  251)       if (osec->isHidden())
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  252)         continue;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  253) 
+3a1b3c9afe74e (Greg McGary            2021-11-04 20:55:31 -0700  254)       auto *sectHdr = reinterpret_cast<SectionHeader *>(buf);
+3a1b3c9afe74e (Greg McGary            2021-11-04 20:55:31 -0700  255)       buf += sizeof(SectionHeader);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  256) 
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  257)       memcpy(sectHdr->sectname, osec->name.data(), osec->name.size());
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  258)       memcpy(sectHdr->segname, name.data(), name.size());
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  259) 
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  260)       sectHdr->addr = osec->addr;
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  261)       sectHdr->offset = osec->fileOff;
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  262)       sectHdr->align = Log2_32(osec->align);
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  263)       sectHdr->flags = osec->flags;
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  264)       sectHdr->size = osec->getSize();
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700  265)       sectHdr->reserved1 = osec->reserved1;
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700  266)       sectHdr->reserved2 = osec->reserved2;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  267)     }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  268)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  269) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  270) private:
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  271)   StringRef name;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  272)   OutputSegment *seg;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  273) };
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  274) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  275) class LCMain final : public LoadCommand {
+3bc88eb3924f6 (Jez Ng                 2021-04-15 21:14:32 -0400  276)   uint32_t getSize() const override {
+3bc88eb3924f6 (Jez Ng                 2021-04-15 21:14:32 -0400  277)     return sizeof(structs::entry_point_command);
+3bc88eb3924f6 (Jez Ng                 2021-04-15 21:14:32 -0400  278)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  279) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  280)   void writeTo(uint8_t *buf) const override {
+3bc88eb3924f6 (Jez Ng                 2021-04-15 21:14:32 -0400  281)     auto *c = reinterpret_cast<structs::entry_point_command *>(buf);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  282)     c->cmd = LC_MAIN;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  283)     c->cmdsize = getSize();
+c7c9776f77712 (Jez Ng                 2020-09-17 10:20:16 -0700  284) 
+c7c9776f77712 (Jez Ng                 2020-09-17 10:20:16 -0700  285)     if (config->entry->isInStubs())
+c7c9776f77712 (Jez Ng                 2020-09-17 10:20:16 -0700  286)       c->entryoff =
+c7c9776f77712 (Jez Ng                 2020-09-17 10:20:16 -0700  287)           in.stubs->fileOff + config->entry->stubsIndex * target->stubSize;
+c7c9776f77712 (Jez Ng                 2020-09-17 10:20:16 -0700  288)     else
+b2a0739012163 (Jez Ng                 2021-06-13 19:43:34 -0400  289)       c->entryoff = config->entry->getVA() - in.header->addr;
+c7c9776f77712 (Jez Ng                 2020-09-17 10:20:16 -0700  290) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  291)     c->stacksize = 0;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  292)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  293) };
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  294) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  295) class LCSymtab final : public LoadCommand {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  296) public:
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  297)   LCSymtab(SymtabSection *symtabSection, StringTableSection *stringTableSection)
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  298)       : symtabSection(symtabSection), stringTableSection(stringTableSection) {}
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  299) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  300)   uint32_t getSize() const override { return sizeof(symtab_command); }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  301) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  302)   void writeTo(uint8_t *buf) const override {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  303)     auto *c = reinterpret_cast<symtab_command *>(buf);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  304)     c->cmd = LC_SYMTAB;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  305)     c->cmdsize = getSize();
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700  306)     c->symoff = symtabSection->fileOff;
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  307)     c->nsyms = symtabSection->getNumSymbols();
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700  308)     c->stroff = stringTableSection->fileOff;
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  309)     c->strsize = stringTableSection->getFileSize();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  310)   }
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  311) 
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  312)   SymtabSection *symtabSection = nullptr;
+4f0cccdd7a06f (Jez Ng                 2020-04-28 16:58:19 -0700  313)   StringTableSection *stringTableSection = nullptr;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  314) };
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  315) 
+87b6fd3e02c69 (Jez Ng                 2020-04-23 20:16:49 -0700  316) // There are several dylib load commands that share the same structure:
+87b6fd3e02c69 (Jez Ng                 2020-04-23 20:16:49 -0700  317) //   * LC_LOAD_DYLIB
+87b6fd3e02c69 (Jez Ng                 2020-04-23 20:16:49 -0700  318) //   * LC_ID_DYLIB
+87b6fd3e02c69 (Jez Ng                 2020-04-23 20:16:49 -0700  319) //   * LC_REEXPORT_DYLIB
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  320) class LCDylib final : public LoadCommand {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  321) public:
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  322)   LCDylib(LoadCommandType type, StringRef path,
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  323)           uint32_t compatibilityVersion = 0, uint32_t currentVersion = 0)
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  324)       : type(type), path(path), compatibilityVersion(compatibilityVersion),
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  325)         currentVersion(currentVersion) {
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  326)     instanceCount++;
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  327)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  328) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  329)   uint32_t getSize() const override {
+4f2a4617936fd (Jez Ng                 2023-01-11 02:23:15 -0500  330)     return alignToPowerOf2(sizeof(dylib_command) + path.size() + 1,
+4f2a4617936fd (Jez Ng                 2023-01-11 02:23:15 -0500  331)                            target->wordSize);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  332)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  333) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  334)   void writeTo(uint8_t *buf) const override {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  335)     auto *c = reinterpret_cast<dylib_command *>(buf);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  336)     buf += sizeof(dylib_command);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  337) 
+87b6fd3e02c69 (Jez Ng                 2020-04-23 20:16:49 -0700  338)     c->cmd = type;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  339)     c->cmdsize = getSize();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  340)     c->dylib.name = sizeof(dylib_command);
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  341)     c->dylib.timestamp = 0;
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  342)     c->dylib.compatibility_version = compatibilityVersion;
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  343)     c->dylib.current_version = currentVersion;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  344) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  345)     memcpy(buf, path.data(), path.size());
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  346)     buf[path.size()] = '\0';
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  347)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  348) 
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  349)   static uint32_t getInstanceCount() { return instanceCount; }
+0f6d720f1f485 (Shoaib Meenai          2021-10-30 16:35:30 -0700  350)   static void resetInstanceCount() { instanceCount = 0; }
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  351) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  352) private:
+87b6fd3e02c69 (Jez Ng                 2020-04-23 20:16:49 -0700  353)   LoadCommandType type;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  354)   StringRef path;
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  355)   uint32_t compatibilityVersion;
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  356)   uint32_t currentVersion;
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  357)   static uint32_t instanceCount;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  358) };
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  359) 
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  360) uint32_t LCDylib::instanceCount = 0;
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  361) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  362) class LCLoadDylinker final : public LoadCommand {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  363) public:
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  364)   uint32_t getSize() const override {
+4f2a4617936fd (Jez Ng                 2023-01-11 02:23:15 -0500  365)     return alignToPowerOf2(sizeof(dylinker_command) + path.size() + 1,
+4f2a4617936fd (Jez Ng                 2023-01-11 02:23:15 -0500  366)                            target->wordSize);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  367)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  368) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  369)   void writeTo(uint8_t *buf) const override {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  370)     auto *c = reinterpret_cast<dylinker_command *>(buf);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  371)     buf += sizeof(dylinker_command);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  372) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  373)     c->cmd = LC_LOAD_DYLINKER;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  374)     c->cmdsize = getSize();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  375)     c->name = sizeof(dylinker_command);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  376) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  377)     memcpy(buf, path.data(), path.size());
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  378)     buf[path.size()] = '\0';
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  379)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  380) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  381) private:
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  382)   // Recent versions of Darwin won't run any binary that has dyld at a
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  383)   // different location.
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  384)   const StringRef path = "/usr/lib/dyld";
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  385) };
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  386) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  387) class LCRPath final : public LoadCommand {
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  388) public:
+2618eaf614418 (Jez Ng                 2021-04-21 22:09:48 -0400  389)   explicit LCRPath(StringRef path) : path(path) {}
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  390) 
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  391)   uint32_t getSize() const override {
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500  392)     return alignToPowerOf2(sizeof(rpath_command) + path.size() + 1,
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500  393)                            target->wordSize);
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  394)   }
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  395) 
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  396)   void writeTo(uint8_t *buf) const override {
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  397)     auto *c = reinterpret_cast<rpath_command *>(buf);
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  398)     buf += sizeof(rpath_command);
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  399) 
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  400)     c->cmd = LC_RPATH;
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  401)     c->cmdsize = getSize();
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  402)     c->path = sizeof(rpath_command);
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  403) 
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  404)     memcpy(buf, path.data(), path.size());
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  405)     buf[path.size()] = '\0';
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  406)   }
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  407) 
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  408) private:
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  409)   StringRef path;
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  410) };
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  411) 
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  412) class LCDyldEnv final : public LoadCommand {
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  413) public:
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  414)   explicit LCDyldEnv(StringRef name) : name(name) {}
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  415) 
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  416)   uint32_t getSize() const override {
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500  417)     return alignToPowerOf2(sizeof(dyld_env_command) + name.size() + 1,
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500  418)                            target->wordSize);
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  419)   }
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  420) 
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  421)   void writeTo(uint8_t *buf) const override {
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  422)     auto *c = reinterpret_cast<dyld_env_command *>(buf);
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  423)     buf += sizeof(dyld_env_command);
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  424) 
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  425)     c->cmd = LC_DYLD_ENVIRONMENT;
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  426)     c->cmdsize = getSize();
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  427)     c->name = sizeof(dyld_env_command);
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  428) 
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  429)     memcpy(buf, name.data(), name.size());
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  430)     buf[name.size()] = '\0';
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  431)   }
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  432) 
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  433) private:
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  434)   StringRef name;
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  435) };
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  436) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  437) class LCMinVersion final : public LoadCommand {
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  438) public:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  439)   explicit LCMinVersion(const PlatformInfo &platformInfo)
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  440)       : platformInfo(platformInfo) {}
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  441) 
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  442)   uint32_t getSize() const override { return sizeof(version_min_command); }
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  443) 
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  444)   void writeTo(uint8_t *buf) const override {
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  445)     auto *c = reinterpret_cast<version_min_command *>(buf);
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  446)     switch (platformInfo.target.Platform) {
+3025c3ededf95 (Juergen Ributzka       2022-01-12 14:01:59 -0800  447)     case PLATFORM_MACOS:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  448)       c->cmd = LC_VERSION_MIN_MACOSX;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  449)       break;
+3025c3ededf95 (Juergen Ributzka       2022-01-12 14:01:59 -0800  450)     case PLATFORM_IOS:
+3025c3ededf95 (Juergen Ributzka       2022-01-12 14:01:59 -0800  451)     case PLATFORM_IOSSIMULATOR:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  452)       c->cmd = LC_VERSION_MIN_IPHONEOS;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  453)       break;
+3025c3ededf95 (Juergen Ributzka       2022-01-12 14:01:59 -0800  454)     case PLATFORM_TVOS:
+3025c3ededf95 (Juergen Ributzka       2022-01-12 14:01:59 -0800  455)     case PLATFORM_TVOSSIMULATOR:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  456)       c->cmd = LC_VERSION_MIN_TVOS;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  457)       break;
+3025c3ededf95 (Juergen Ributzka       2022-01-12 14:01:59 -0800  458)     case PLATFORM_WATCHOS:
+3025c3ededf95 (Juergen Ributzka       2022-01-12 14:01:59 -0800  459)     case PLATFORM_WATCHOSSIMULATOR:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  460)       c->cmd = LC_VERSION_MIN_WATCHOS;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  461)       break;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  462)     default:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  463)       llvm_unreachable("invalid platform");
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  464)       break;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  465)     }
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  466)     c->cmdsize = getSize();
+6578e0d1d0e43 (Keith Smiley           2023-03-03 12:08:33 -0800  467)     c->version = encodeVersion(platformInfo.target.MinDeployment);
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  468)     c->sdk = encodeVersion(platformInfo.sdk);
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  469)   }
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  470) 
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  471) private:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  472)   const PlatformInfo &platformInfo;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  473) };
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  474) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  475) class LCBuildVersion final : public LoadCommand {
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  476) public:
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  477)   explicit LCBuildVersion(const PlatformInfo &platformInfo)
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  478)       : platformInfo(platformInfo) {}
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  479) 
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  480)   const int ntools = 1;
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  481) 
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  482)   uint32_t getSize() const override {
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  483)     return sizeof(build_version_command) + ntools * sizeof(build_tool_version);
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  484)   }
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  485) 
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  486)   void writeTo(uint8_t *buf) const override {
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  487)     auto *c = reinterpret_cast<build_version_command *>(buf);
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  488)     c->cmd = LC_BUILD_VERSION;
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  489)     c->cmdsize = getSize();
+895a72111b0f1 (Nico Weber             2022-04-22 11:55:50 -0400  490) 
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  491)     c->platform = static_cast<uint32_t>(platformInfo.target.Platform);
+6578e0d1d0e43 (Keith Smiley           2023-03-03 12:08:33 -0800  492)     c->minos = encodeVersion(platformInfo.target.MinDeployment);
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  493)     c->sdk = encodeVersion(platformInfo.sdk);
+895a72111b0f1 (Nico Weber             2022-04-22 11:55:50 -0400  494) 
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  495)     c->ntools = ntools;
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  496)     auto *t = reinterpret_cast<build_tool_version *>(&c[1]);
+806f5b3019669 (Keith Smiley           2023-06-14 08:51:30 -0700  497)     t->tool = TOOL_LLD;
+28a2102ee377a (Jez Ng                 2021-07-11 18:35:45 -0400  498)     t->version = encodeVersion(VersionTuple(
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  499)         LLVM_VERSION_MAJOR, LLVM_VERSION_MINOR, LLVM_VERSION_PATCH));
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  500)   }
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  501) 
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  502) private:
+55a32812fa5ec (Jez Ng                 2021-03-04 14:36:47 -0500  503)   const PlatformInfo &platformInfo;
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  504) };
+537f5483fe4e0 (Greg McGary            2020-08-14 12:35:31 -0700  505) 
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  506) // Stores a unique identifier for the output file based on an MD5 hash of its
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  507) // contents. In order to hash the contents, we must first write them, but
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  508) // LC_UUID itself must be part of the written contents in order for all the
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  509) // offsets to be calculated correctly. We resolve this circular paradox by
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  510) // first writing an LC_UUID with an all-zero UUID, then updating the UUID with
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  511) // its real value later.
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  512) class LCUuid final : public LoadCommand {
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  513) public:
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  514)   uint32_t getSize() const override { return sizeof(uuid_command); }
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  515) 
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  516)   void writeTo(uint8_t *buf) const override {
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  517)     auto *c = reinterpret_cast<uuid_command *>(buf);
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  518)     c->cmd = LC_UUID;
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  519)     c->cmdsize = getSize();
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  520)     uuidBuf = c->uuid;
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  521)   }
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  522) 
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  523)   void writeUuid(uint64_t digest) const {
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  524)     // xxhash only gives us 8 bytes, so put some fixed data in the other half.
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  525)     static_assert(sizeof(uuid_command::uuid) == 16, "unexpected uuid size");
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  526)     memcpy(uuidBuf, "LLD\xa1UU1D", 8);
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  527)     memcpy(uuidBuf + 8, &digest, 8);
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  528) 
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  529)     // RFC 4122 conformance. We need to fix 4 bits in byte 6 and 2 bits in
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  530)     // byte 8. Byte 6 is already fine due to the fixed data we put in. We don't
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  531)     // want to lose bits of the digest in byte 8, so swap that with a byte of
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  532)     // fixed data that happens to have the right bits set.
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  533)     std::swap(uuidBuf[3], uuidBuf[8]);
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  534) 
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  535)     // Claim that this is an MD5-based hash. It isn't, but this signals that
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  536)     // this is not a time-based and not a random hash. MD5 seems like the least
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  537)     // bad lie we can put here.
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  538)     assert((uuidBuf[6] & 0xf0) == 0x30 && "See RFC 4122 Sections 4.2.2, 4.1.3");
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500  539)     assert((uuidBuf[8] & 0xc0) == 0x80 && "See RFC 4122 Section 4.2.2");
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  540)   }
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  541) 
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  542)   mutable uint8_t *uuidBuf;
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  543) };
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  544) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  545) template <class LP> class LCEncryptionInfo final : public LoadCommand {
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  546) public:
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  547)   uint32_t getSize() const override {
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  548)     return sizeof(typename LP::encryption_info_command);
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  549)   }
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  550) 
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  551)   void writeTo(uint8_t *buf) const override {
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  552)     using EncryptionInfo = typename LP::encryption_info_command;
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  553)     auto *c = reinterpret_cast<EncryptionInfo *>(buf);
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  554)     buf += sizeof(EncryptionInfo);
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  555)     c->cmd = LP::encryptionInfoLCType;
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  556)     c->cmdsize = getSize();
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  557)     c->cryptoff = in.header->getSize();
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  558)     auto it = find_if(outputSegments, [](const OutputSegment *seg) {
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  559)       return seg->name == segment_names::text;
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  560)     });
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  561)     assert(it != outputSegments.end());
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  562)     c->cryptsize = (*it)->fileSize - c->cryptoff;
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  563)   }
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  564) };
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  565) 
+da24e6d43e3fd (Jez Ng                 2021-06-13 19:43:37 -0400  566) class LCCodeSignature final : public LoadCommand {
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  567) public:
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  568)   LCCodeSignature(CodeSignatureSection *section) : section(section) {}
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  569) 
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  570)   uint32_t getSize() const override { return sizeof(linkedit_data_command); }
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  571) 
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  572)   void writeTo(uint8_t *buf) const override {
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  573)     auto *c = reinterpret_cast<linkedit_data_command *>(buf);
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  574)     c->cmd = LC_CODE_SIGNATURE;
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  575)     c->cmdsize = getSize();
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  576)     c->dataoff = static_cast<uint32_t>(section->fileOff);
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  577)     c->datasize = section->getSize();
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  578)   }
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  579) 
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  580)   CodeSignatureSection *section;
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  581) };
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  582) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  583) class LCExportsTrie final : public LoadCommand {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  584) public:
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  585)   LCExportsTrie(ExportSection *section) : section(section) {}
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  586) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  587)   uint32_t getSize() const override { return sizeof(linkedit_data_command); }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  588) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  589)   void writeTo(uint8_t *buf) const override {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  590)     auto *c = reinterpret_cast<linkedit_data_command *>(buf);
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  591)     c->cmd = LC_DYLD_EXPORTS_TRIE;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  592)     c->cmdsize = getSize();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  593)     c->dataoff = section->fileOff;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  594)     c->datasize = section->getSize();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  595)   }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  596) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  597)   ExportSection *section;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  598) };
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  599) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  600) class LCChainedFixups final : public LoadCommand {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  601) public:
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  602)   LCChainedFixups(ChainedFixupsSection *section) : section(section) {}
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  603) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  604)   uint32_t getSize() const override { return sizeof(linkedit_data_command); }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  605) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  606)   void writeTo(uint8_t *buf) const override {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  607)     auto *c = reinterpret_cast<linkedit_data_command *>(buf);
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  608)     c->cmd = LC_DYLD_CHAINED_FIXUPS;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  609)     c->cmdsize = getSize();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  610)     c->dataoff = section->fileOff;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  611)     c->datasize = section->getSize();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  612)   }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  613) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  614)   ChainedFixupsSection *section;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  615) };
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  616) 
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  617) } // namespace
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  618) 
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  619) void Writer::treatSpecialUndefineds() {
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  620)   if (config->entry)
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  621)     if (auto *undefined = dyn_cast<Undefined>(config->entry))
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  622)       treatUndefinedSymbol(*undefined, "the entry point");
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  623) 
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  624)   // FIXME: This prints symbols that are undefined both in input files and
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  625)   // via -u flag twice.
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  626)   for (const Symbol *sym : config->explicitUndefineds) {
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  627)     if (const auto *undefined = dyn_cast<Undefined>(sym))
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  628)       treatUndefinedSymbol(*undefined, "-u");
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  629)   }
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  630)   // Literal exported-symbol names must be defined, but glob
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  631)   // patterns need not match.
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  632)   for (const CachedHashStringRef &cachedName :
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  633)        config->exportedSymbols.literals) {
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  634)     if (const Symbol *sym = symtab->find(cachedName))
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  635)       if (const auto *undefined = dyn_cast<Undefined>(sym))
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  636)         treatUndefinedSymbol(*undefined, "-exported_symbol(s_list)");
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  637)   }
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  638) }
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400  639) 
+427d3597219ec (Greg McGary            2021-03-29 17:19:29 -0700  640) static void prepareSymbolRelocation(Symbol *sym, const InputSection *isec,
+83d59e05b2017 (Alexandre Ganea        2022-01-20 14:53:18 -0500  641)                                     const lld::macho::Reloc &r) {
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  642)   if (!sym->isLive()) {
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  643)     if (Defined *defined = dyn_cast<Defined>(sym)) {
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  644)       if (config->emitInitOffsets &&
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  645)           defined->isec()->getName() == section_names::moduleInitFunc)
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  646)         fatal(isec->getLocation(r.offset) + ": cannot reference " +
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  647)               sym->getName() +
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  648)               " defined in __mod_init_func when -init_offsets is used");
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  649)     }
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  650)     assert(false && "referenced symbol must be live");
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  651)   }
+d64efe42eb98a (Daniel Bertalan        2024-07-06 15:41:40 +0200  652) 
+5433a79176a3d (Jez Ng                 2021-03-11 13:28:09 -0500  653)   const RelocAttrs &relocAttrs = target->getRelocAttrs(r.type);
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  654) 
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  655)   if (relocAttrs.hasAttr(RelocAttrBits::BRANCH)) {
+6b6d1abb10216 (Daniel Bertalan        2022-08-14 15:42:21 +0200  656)     if (needsBinding(sym))
+6b6d1abb10216 (Daniel Bertalan        2022-08-14 15:42:21 +0200  657)       in.stubs->addEntry(sym);
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  658)   } else if (relocAttrs.hasAttr(RelocAttrBits::GOT)) {
+5e851733c5b60 (Jez Ng                 2021-02-23 21:41:54 -0500  659)     if (relocAttrs.hasAttr(RelocAttrBits::POINTER) || needsBinding(sym))
+5e851733c5b60 (Jez Ng                 2021-02-23 21:41:54 -0500  660)       in.got->addEntry(sym);
+5e851733c5b60 (Jez Ng                 2021-02-23 21:41:54 -0500  661)   } else if (relocAttrs.hasAttr(RelocAttrBits::TLV)) {
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  662)     if (needsBinding(sym))
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  663)       in.tlvPointers->addEntry(sym);
+5e851733c5b60 (Jez Ng                 2021-02-23 21:41:54 -0500  664)   } else if (relocAttrs.hasAttr(RelocAttrBits::UNSIGNED)) {
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  665)     // References from thread-local variable sections are treated as offsets
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  666)     // relative to the start of the referent section, and therefore have no
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  667)     // need of rebase opcodes.
+f6b6e7214366f (Jez Ng                 2021-07-01 20:33:55 -0400  668)     if (!(isThreadLocalVariables(isec->getFlags()) && isa<Defined>(sym)))
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  669)       addNonLazyBindingEntries(sym, isec, r.offset, r.addend);
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  670)   }
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  671) }
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  672) 
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700  673) void Writer::scanRelocations() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400  674)   TimeTraceScope timeScope("Scan relocations");
+04e8d0b62dca0 (Nico Weber             2021-07-15 12:54:42 -0400  675) 
+04e8d0b62dca0 (Nico Weber             2021-07-15 12:54:42 -0400  676)   // This can't use a for-each loop: It calls treatUndefinedSymbol(), which can
+04e8d0b62dca0 (Nico Weber             2021-07-15 12:54:42 -0400  677)   // add to inputSections, which invalidates inputSections's iterators.
+04e8d0b62dca0 (Nico Weber             2021-07-15 12:54:42 -0400  678)   for (size_t i = 0; i < inputSections.size(); ++i) {
+04e8d0b62dca0 (Nico Weber             2021-07-15 12:54:42 -0400  679)     ConcatInputSection *isec = inputSections[i];
+04e8d0b62dca0 (Nico Weber             2021-07-15 12:54:42 -0400  680) 
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400  681)     if (isec->shouldOmitFromOutput())
+d5a70db1938c0 (Nico Weber             2021-05-06 14:47:57 -0400  682)       continue;
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700  683) 
+541390131ef72 (Jez Ng                 2021-02-27 12:30:16 -0500  684)     for (auto it = isec->relocs.begin(); it != isec->relocs.end(); ++it) {
+83d59e05b2017 (Alexandre Ganea        2022-01-20 14:53:18 -0500  685)       lld::macho::Reloc &r = *it;
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  686) 
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  687)       // Canonicalize the referent so that later accesses in Writer won't
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  688)       // have to worry about it.
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  689)       if (auto *referentIsec = r.referent.dyn_cast<InputSection *>())
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  690)         r.referent = referentIsec->canonical();
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  691) 
+541390131ef72 (Jez Ng                 2021-02-27 12:30:16 -0500  692)       if (target->hasAttr(r.type, RelocAttrBits::SUBTRAHEND)) {
+541390131ef72 (Jez Ng                 2021-02-27 12:30:16 -0500  693)         // Skip over the following UNSIGNED relocation -- it's just there as the
+541390131ef72 (Jez Ng                 2021-02-27 12:30:16 -0500  694)         // minuend, and doesn't have the usual UNSIGNED semantics. We don't want
+541390131ef72 (Jez Ng                 2021-02-27 12:30:16 -0500  695)         // to emit rebase opcodes for it.
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  696)         ++it;
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  697)         // Canonicalize the referent so that later accesses in Writer won't
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  698)         // have to worry about it.
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  699)         if (auto *referentIsec = it->referent.dyn_cast<InputSection *>())
+7e5f4ed556589 (Vy Nguyen              2023-05-31 14:22:07 -0400  700)           it->referent = referentIsec->canonical();
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  701)         continue;
+541390131ef72 (Jez Ng                 2021-02-27 12:30:16 -0500  702)       }
+427d3597219ec (Greg McGary            2021-03-29 17:19:29 -0700  703)       if (auto *sym = r.referent.dyn_cast<Symbol *>()) {
+163dcd851309d (Jez Ng                 2021-02-03 13:31:40 -0500  704)         if (auto *undefined = dyn_cast<Undefined>(sym))
+f2e92cf60e45c (Daniel Bertalan        2022-06-14 09:41:28 -0400  705)           treatUndefinedSymbol(*undefined, isec, r.offset);
+0658fc654c758 (Nico Weber             2021-02-28 13:42:14 -0500  706)         // treatUndefinedSymbol() can replace sym with a DylibSymbol; re-check.
+5433a79176a3d (Jez Ng                 2021-03-11 13:28:09 -0500  707)         if (!isa<Undefined>(sym) && validateSymbolRelocation(sym, isec, r))
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  708)           prepareSymbolRelocation(sym, isec, r);
+e4e673e75a067 (Jez Ng                 2020-09-05 10:55:33 -0700  709)       } else {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  710)         if (!r.pcrel) {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  711)           if (config->emitChainedFixups)
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  712)             in.chainedFixups->addRebase(isec, r.offset);
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  713)           else
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  714)             in.rebase->addEntry(isec, r.offset);
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  715)         }
+df2a5778c32bb (Jez Ng                 2020-05-18 15:46:33 -0700  716)       }
+df2a5778c32bb (Jez Ng                 2020-05-18 15:46:33 -0700  717)     }
+df2a5778c32bb (Jez Ng                 2020-05-18 15:46:33 -0700  718)   }
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400  719) 
+7b45dfc6811a5 (Jez Ng                 2022-10-11 23:50:46 -0400  720)   in.unwindInfo->prepare();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  721) }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  722) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  723) static void addNonWeakDefinition(const Defined *defined) {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  724)   if (config->emitChainedFixups)
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  725)     in.chainedFixups->setHasNonWeakDefinition();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  726)   else
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  727)     in.weakBinding->addNonWeakDefinition(defined);
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  728) }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  729) 
+4c8276cdc120c (Jez Ng                 2020-12-16 19:14:57 -0500  730) void Writer::scanSymbols() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400  731)   TimeTraceScope timeScope("Scan symbols");
+e1a003dbbd016 (alx32                  2024-03-25 06:55:11 -0700  732)   ObjCSelRefsHelper::initialize();
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400  733)   for (Symbol *sym : symtab->getSymbols()) {
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400  734)     if (auto *defined = dyn_cast<Defined>(sym)) {
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  735)       if (!defined->isLive())
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  736)         continue;
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  737)       if (defined->overridesWeakDef)
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  738)         addNonWeakDefinition(defined);
+2a3a79ce4c214 (alx32                  2024-04-18 11:42:22 -0700  739)       if (!defined->isAbsolute() && isCodeSection(defined->isec()))
+a9353dbe517c5 (Jez Ng                 2021-10-26 16:04:06 -0400  740)         in.unwindInfo->addSymbol(defined);
+4c8276cdc120c (Jez Ng                 2020-12-16 19:14:57 -0500  741)     } else if (const auto *dysym = dyn_cast<DylibSymbol>(sym)) {
+a5645513dba70 (Nico Weber             2021-05-07 17:10:05 -0400  742)       // This branch intentionally doesn't check isLive().
+cafb6cd10c743 (Nico Weber             2021-02-25 19:56:31 -0500  743)       if (dysym->isDynamicLookup())
+cafb6cd10c743 (Nico Weber             2021-02-25 19:56:31 -0500  744)         continue;
+163dcd851309d (Jez Ng                 2021-02-03 13:31:40 -0500  745)       dysym->getFile()->refState =
+2c1903412b0a7 (Nico Weber             2021-05-31 22:12:35 -0400  746)           std::max(dysym->getFile()->refState, dysym->getRefState());
+9e296584cebbc (Kazu Hirata            2022-08-20 00:12:35 -0700  747)     } else if (isa<Undefined>(sym)) {
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  748)       if (ObjCStubsSection::isObjCStubSymbol(sym)) {
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  749)         // When -dead_strip is enabled, we don't want to emit any dead stubs.
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  750)         // Although this stub symbol is yet undefined, addSym() was called
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  751)         // during MarkLive.
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  752)         if (config->deadStrip) {
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  753)           if (!sym->isLive())
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  754)             continue;
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  755)         }
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700  756)         in.objcStubs->addEntry(sym);
+cb46c6181770d (Kyungwoo Lee           2024-01-29 23:29:57 -0800  757)       }
+4c8276cdc120c (Jez Ng                 2020-12-16 19:14:57 -0500  758)     }
+4c8276cdc120c (Jez Ng                 2020-12-16 19:14:57 -0500  759)   }
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  760) 
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  761)   for (const InputFile *file : inputFiles) {
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  762)     if (auto *objFile = dyn_cast<ObjFile>(file))
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  763)       for (Symbol *sym : objFile->symbols) {
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400  764)         if (auto *defined = dyn_cast_or_null<Defined>(sym)) {
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400  765)           if (!defined->isLive())
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400  766)             continue;
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400  767)           if (!defined->isExternal() && !defined->isAbsolute() &&
+2a3a79ce4c214 (alx32                  2024-04-18 11:42:22 -0700  768)               isCodeSection(defined->isec()))
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  769)             in.unwindInfo->addSymbol(defined);
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400  770)         }
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  771)       }
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400  772)   }
+4c8276cdc120c (Jez Ng                 2020-12-16 19:14:57 -0500  773) }
+4c8276cdc120c (Jez Ng                 2020-12-16 19:14:57 -0500  774) 
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  775) // TODO: ld64 enforces the old load commands in a few other cases.
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  776) static bool useLCBuildVersion(const PlatformInfo &platformInfo) {
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  777)   static const std::array<std::pair<PlatformType, VersionTuple>, 7> minVersion =
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  778)       {{{PLATFORM_MACOS, VersionTuple(10, 14)},
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  779)         {PLATFORM_IOS, VersionTuple(12, 0)},
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  780)         {PLATFORM_IOSSIMULATOR, VersionTuple(13, 0)},
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  781)         {PLATFORM_TVOS, VersionTuple(12, 0)},
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  782)         {PLATFORM_TVOSSIMULATOR, VersionTuple(13, 0)},
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  783)         {PLATFORM_WATCHOS, VersionTuple(5, 0)},
+4f688d00f4305 (Daniel Bertalan        2022-09-04 22:43:02 +0200  784)         {PLATFORM_WATCHOSSIMULATOR, VersionTuple(6, 0)}}};
+f6e84a84f95eb (Jez Ng                 2021-07-11 18:24:53 -0400  785)   auto it = llvm::find_if(minVersion, [&](const auto &p) {
+f6e84a84f95eb (Jez Ng                 2021-07-11 18:24:53 -0400  786)     return p.first == platformInfo.target.Platform;
+f6e84a84f95eb (Jez Ng                 2021-07-11 18:24:53 -0400  787)   });
+6578e0d1d0e43 (Keith Smiley           2023-03-03 12:08:33 -0800  788)   return it == minVersion.end()
+6578e0d1d0e43 (Keith Smiley           2023-03-03 12:08:33 -0800  789)              ? true
+6578e0d1d0e43 (Keith Smiley           2023-03-03 12:08:33 -0800  790)              : platformInfo.target.MinDeployment >= it->second;
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  791) }
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  792) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  793) template <class LP> void Writer::createLoadCommands() {
+c3e4f3b231db1 (Greg McGary            2021-01-02 10:31:55 -0800  794)   uint8_t segIndex = 0;
+c3e4f3b231db1 (Greg McGary            2021-01-02 10:31:55 -0800  795)   for (OutputSegment *seg : outputSegments) {
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  796)     in.header->addLoadCommand(make<LCSegment<LP>>(seg->name, seg));
+c3e4f3b231db1 (Greg McGary            2021-01-02 10:31:55 -0800  797)     seg->index = segIndex++;
+c3e4f3b231db1 (Greg McGary            2021-01-02 10:31:55 -0800  798)   }
+c3e4f3b231db1 (Greg McGary            2021-01-02 10:31:55 -0800  799) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  800)   if (config->emitChainedFixups) {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  801)     in.header->addLoadCommand(make<LCChainedFixups>(in.chainedFixups));
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  802)     in.header->addLoadCommand(make<LCExportsTrie>(in.exports));
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  803)   } else {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  804)     in.header->addLoadCommand(make<LCDyldInfo>(
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  805)         in.rebase, in.binding, in.weakBinding, in.lazyBinding, in.exports));
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200  806)   }
+3587de2281986 (Jez Ng                 2020-07-30 14:28:41 -0700  807)   in.header->addLoadCommand(make<LCSymtab>(symtabSection, stringTableSection));
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  808)   in.header->addLoadCommand(
+51629abce0e2f (Jez Ng                 2020-12-01 14:45:09 -0800  809)       make<LCDysymtab>(symtabSection, indirectSymtabSection));
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  810)   if (!config->umbrella.empty())
+db64306d99138 (Nico Weber             2021-07-05 14:40:52 -0400  811)     in.header->addLoadCommand(make<LCSubFramework>(config->umbrella));
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  812)   if (config->emitEncryptionInfo)
+ab9c21bbab38c (Jez Ng                 2021-04-21 13:35:12 -0400  813)     in.header->addLoadCommand(make<LCEncryptionInfo<LP>>());
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  814)   for (StringRef path : config->runtimePaths)
+e48d1262b88f7 (Jez Ng                 2020-08-12 19:50:28 -0700  815)     in.header->addLoadCommand(make<LCRPath>(path));
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  816) 
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  817)   switch (config->outputType) {
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  818)   case MH_EXECUTE:
+3587de2281986 (Jez Ng                 2020-07-30 14:28:41 -0700  819)     in.header->addLoadCommand(make<LCLoadDylinker>());
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  820)     break;
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  821)   case MH_DYLIB:
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  822)     in.header->addLoadCommand(make<LCDylib>(LC_ID_DYLIB, config->installName,
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  823)                                             config->dylibCompatibilityVersion,
+d058b69b1cd3d (Nico Weber             2020-12-14 18:24:50 -0500  824)                                             config->dylibCurrentVersion));
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  825)     break;
+f23f5126912b7 (Jez Ng                 2020-08-31 23:23:37 -0700  826)   case MH_BUNDLE:
+f23f5126912b7 (Jez Ng                 2020-08-31 23:23:37 -0700  827)     break;
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  828)   default:
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  829)     llvm_unreachable("unhandled output file type");
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700  830)   }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  831) 
+f317ce218e75a (Keith Smiley           2023-07-19 11:07:57 -0700  832)   if (config->generateUuid) {
+f317ce218e75a (Keith Smiley           2023-07-19 11:07:57 -0700  833)     uuidCommand = make<LCUuid>();
+f317ce218e75a (Keith Smiley           2023-07-19 11:07:57 -0700  834)     in.header->addLoadCommand(uuidCommand);
+f317ce218e75a (Keith Smiley           2023-07-19 11:07:57 -0700  835)   }
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700  836) 
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  837)   if (useLCBuildVersion(config->platformInfo))
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  838)     in.header->addLoadCommand(make<LCBuildVersion>(config->platformInfo));
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  839)   else
+5c835e1ae5e17 (Alexander Shaposhnikov 2021-04-21 05:41:14 -0700  840)     in.header->addLoadCommand(make<LCMinVersion>(config->platformInfo));
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  841) 
+895a72111b0f1 (Nico Weber             2022-04-22 11:55:50 -0400  842)   if (config->secondaryPlatformInfo) {
+895a72111b0f1 (Nico Weber             2022-04-22 11:55:50 -0400  843)     in.header->addLoadCommand(
+895a72111b0f1 (Nico Weber             2022-04-22 11:55:50 -0400  844)         make<LCBuildVersion>(*config->secondaryPlatformInfo));
+895a72111b0f1 (Nico Weber             2022-04-22 11:55:50 -0400  845)   }
+895a72111b0f1 (Nico Weber             2022-04-22 11:55:50 -0400  846) 
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  847)   // This is down here to match ld64's load command order.
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  848)   if (config->outputType == MH_EXECUTE)
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  849)     in.header->addLoadCommand(make<LCMain>());
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  850) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  851)   // See ld64's OutputFile::buildDylibOrdinalMapping for the corresponding
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  852)   // library ordinal computation code in ld64.
+5a856f5b44997 (Vy Nguyen              2021-02-22 13:03:02 -0500  853)   int64_t dylibOrdinal = 1;
+aeae3e0ba9061 (Nico Weber             2021-06-01 15:13:46 -0400  854)   DenseMap<StringRef, int64_t> ordinalForInstallName;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  855) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  856)   std::vector<DylibFile *> dylibFiles;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700  857)   for (InputFile *file : inputFiles) {
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  858)     if (auto *dylibFile = dyn_cast<DylibFile>(file))
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  859)       dylibFiles.push_back(dylibFile);
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  860)   }
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  861)   for (size_t i = 0; i < dylibFiles.size(); ++i)
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  862)     dylibFiles.insert(dylibFiles.end(), dylibFiles[i]->extraDylibs.begin(),
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  863)                       dylibFiles[i]->extraDylibs.end());
+5a856f5b44997 (Vy Nguyen              2021-02-22 13:03:02 -0500  864) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  865)   for (DylibFile *dylibFile : dylibFiles) {
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  866)     if (dylibFile->isBundleLoader) {
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  867)       dylibFile->ordinal = BIND_SPECIAL_DYLIB_MAIN_EXECUTABLE;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  868)       // Shortcut since bundle-loader does not re-export the symbols.
+5a856f5b44997 (Vy Nguyen              2021-02-22 13:03:02 -0500  869) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  870)       dylibFile->reexport = false;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  871)       continue;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  872)     }
+2c1903412b0a7 (Nico Weber             2021-05-31 22:12:35 -0400  873) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  874)     // Don't emit load commands for a dylib that is not referenced if:
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  875)     // - it was added implicitly (via a reexport, an LC_LOAD_DYLINKER --
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  876)     //   if it's on the linker command line, it's explicit)
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  877)     // - or it's marked MH_DEAD_STRIPPABLE_DYLIB
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  878)     // - or the flag -dead_strip_dylibs is used
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  879)     // FIXME: `isReferenced()` is currently computed before dead code
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  880)     // stripping, so references from dead code keep a dylib alive. This
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  881)     // matches ld64, but it's something we should do better.
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  882)     if (!dylibFile->isReferenced() && !dylibFile->forceNeeded &&
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  883)         (!dylibFile->isExplicitlyLinked() || dylibFile->deadStrippable ||
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  884)          config->deadStripDylibs))
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  885)       continue;
+aeae3e0ba9061 (Nico Weber             2021-06-01 15:13:46 -0400  886) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  887)     // Several DylibFiles can have the same installName. Only emit a single
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  888)     // load command for that installName and give all these DylibFiles the
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  889)     // same ordinal.
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  890)     // This can happen in several cases:
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  891)     // - a new framework could change its installName to an older
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  892)     //   framework name via an $ld$ symbol depending on platform_version
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  893)     // - symlinks (for example, libpthread.tbd is a symlink to libSystem.tbd;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  894)     //   Foo.framework/Foo.tbd is usually a symlink to
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  895)     //   Foo.framework/Versions/Current/Foo.tbd, where
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  896)     //   Foo.framework/Versions/Current is usually a symlink to
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  897)     //   Foo.framework/Versions/A)
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  898)     // - a framework can be linked both explicitly on the linker
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  899)     //   command line and implicitly as a reexport from a different
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  900)     //   framework. The re-export will usually point to the tbd file
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  901)     //   in Foo.framework/Versions/A/Foo.tbd, while the explicit link will
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  902)     //   usually find Foo.framework/Foo.tbd. These are usually symlinks,
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  903)     //   but in a --reproduce archive they will be identical but distinct
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  904)     //   files.
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  905)     // In the first case, *semantically distinct* DylibFiles will have the
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  906)     // same installName.
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  907)     int64_t &ordinal = ordinalForInstallName[dylibFile->installName];
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  908)     if (ordinal) {
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  909)       dylibFile->ordinal = ordinal;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  910)       continue;
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  911)     }
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  912) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  913)     ordinal = dylibFile->ordinal = dylibOrdinal++;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  914)     LoadCommandType lcType =
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  915)         dylibFile->forceWeakImport || dylibFile->refState == RefState::Weak
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  916)             ? LC_LOAD_WEAK_DYLIB
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  917)             : LC_LOAD_DYLIB;
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  918)     in.header->addLoadCommand(make<LCDylib>(lcType, dylibFile->installName,
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  919)                                             dylibFile->compatibilityVersion,
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  920)                                             dylibFile->currentVersion));
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  921) 
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  922)     if (dylibFile->reexport)
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  923)       in.header->addLoadCommand(
+241f0e8b76d54 (Nico Weber             2022-06-09 12:13:31 -0400  924)           make<LCDylib>(LC_REEXPORT_DYLIB, dylibFile->installName));
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  925)   }
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  926) 
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  927)   for (const auto &dyldEnv : config->dyldEnvs)
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  928)     in.header->addLoadCommand(make<LCDyldEnv>(dyldEnv));
+016c2f5e3233e (Vy Nguyen              2022-09-16 13:38:20 -0400  929) 
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  930)   if (functionStartsSection)
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  931)     in.header->addLoadCommand(make<LCFunctionStarts>(functionStartsSection));
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  932)   if (dataInCodeSection)
+bcbb3066ce8a6 (Nico Weber             2021-07-17 11:18:48 -0400  933)     in.header->addLoadCommand(make<LCDataInCode>(dataInCodeSection));
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  934)   if (codeSignatureSection)
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  935)     in.header->addLoadCommand(make<LCCodeSignature>(codeSignatureSection));
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  936) 
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  937)   const uint32_t MACOS_MAXPATHLEN = 1024;
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  938)   config->headerPad = std::max(
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  939)       config->headerPad, (config->headerPadMaxInstallNames
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  940)                               ? LCDylib::getInstanceCount() * MACOS_MAXPATHLEN
+145ce86dba6e1 (Greg McGary            2020-09-21 11:04:13 -0700  941)                               : 0));
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  942) }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700  943) 
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  944) // Sorting only can happen once all outputs have been collected. Here we sort
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  945) // segments, output sections within each segment, and input sections within each
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  946) // output segment.
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  947) static void sortSegmentsAndSections() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400  948)   TimeTraceScope timeScope("Sort segments and sections");
+7599e98ab7904 (Jez Ng                 2021-05-25 14:57:18 -0400  949)   sortOutputSegments();
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  950) 
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  951)   DenseMap<const InputSection *, size_t> isecPriorities =
+f858fba631d55 (Roger Kim              2022-03-23 13:21:34 -0400  952)       priorityBuilder.buildInputSectionPriorities();
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  953) 
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  954)   uint32_t sectionIndex = 0;
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  955)   for (OutputSegment *seg : outputSegments) {
+7599e98ab7904 (Jez Ng                 2021-05-25 14:57:18 -0400  956)     seg->sortOutputSections();
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  957)     // References from thread-local variable sections are treated as offsets
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  958)     // relative to the start of the thread-local data memory area, which
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  959)     // is initialized via copying all the TLV data sections (which are all
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  960)     // contiguous). If later data sections require a greater alignment than
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  961)     // earlier ones, the offsets of data within those sections won't be
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  962)     // guaranteed to aligned unless we normalize alignments. We therefore use
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  963)     // the largest alignment for all TLV data sections.
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  964)     uint32_t tlvAlign = 0;
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  965)     for (const OutputSection *osec : seg->getSections())
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  966)       if (isThreadLocalData(osec->flags) && osec->align > tlvAlign)
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  967)         tlvAlign = osec->align;
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  968) 
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800  969)     for (OutputSection *osec : seg->getSections()) {
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  970)       // Now that the output sections are sorted, assign the final
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  971)       // output section indices.
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  972)       if (!osec->isHidden())
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700  973)         osec->index = ++sectionIndex;
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  974)       if (isThreadLocalData(osec->flags)) {
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  975)         if (!firstTLVDataSection)
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  976)           firstTLVDataSection = osec;
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  977)         osec->align = tlvAlign;
+319181f767186 (Mike Hommey            2021-12-28 19:01:01 -0500  978)       }
+daaaed6bb8904 (Jez Ng                 2021-01-08 18:47:40 -0500  979) 
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  980)       if (!isecPriorities.empty()) {
+33706191d88d3 (Jez Ng                 2021-05-25 14:57:16 -0400  981)         if (auto *merged = dyn_cast<ConcatOutputSection>(osec)) {
+f546165754d41 (Daniel Bertalan        2022-09-28 16:23:18 +0200  982)           llvm::stable_sort(
+f546165754d41 (Daniel Bertalan        2022-09-28 16:23:18 +0200  983)               merged->inputs, [&](InputSection *a, InputSection *b) {
+f546165754d41 (Daniel Bertalan        2022-09-28 16:23:18 +0200  984)                 return isecPriorities.lookup(a) > isecPriorities.lookup(b);
+f546165754d41 (Daniel Bertalan        2022-09-28 16:23:18 +0200  985)               });
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  986)         }
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  987)       }
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  988)     }
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  989)   }
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  990) }
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700  991) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  992) template <class LP> void Writer::createOutputSections() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400  993)   TimeTraceScope timeScope("Create output sections");
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700  994)   // First, create hidden sections
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700  995)   stringTableSection = make<StringTableSection>();
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400  996)   symtabSection = makeSymtabSection<LP>(*stringTableSection);
+5d26bd3b75538 (Jez Ng                 2020-09-04 18:02:07 -0700  997)   indirectSymtabSection = make<IndirectSymtabSection>();
+0e319bd0be26c (Nico Weber             2021-03-05 09:07:58 -0500  998)   if (config->adhocCodesign)
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800  999)     codeSignatureSection = make<CodeSignatureSection>();
+b579938d40b48 (Nico Weber             2021-06-15 21:38:29 -0400 1000)   if (config->emitDataInCodeInfo)
+b579938d40b48 (Nico Weber             2021-06-15 21:38:29 -0400 1001)     dataInCodeSection = make<DataInCodeSection>();
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400 1002)   if (config->emitFunctionStarts)
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400 1003)     functionStartsSection = make<FunctionStartsSection>();
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1004) 
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1005)   switch (config->outputType) {
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1006)   case MH_EXECUTE:
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700 1007)     make<PageZeroSection>();
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1008)     break;
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1009)   case MH_DYLIB:
+f23f5126912b7 (Jez Ng                 2020-08-31 23:23:37 -0700 1010)   case MH_BUNDLE:
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1011)     break;
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1012)   default:
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1013)     llvm_unreachable("unhandled output file type");
+62b8f32f76998 (Jez Ng                 2020-04-28 16:58:22 -0700 1014)   }
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700 1015) 
+33706191d88d3 (Jez Ng                 2021-05-25 14:57:16 -0400 1016)   // Then add input sections to output sections.
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400 1017)   for (ConcatInputSection *isec : inputSections) {
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400 1018)     if (isec->shouldOmitFromOutput())
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400 1019)       continue;
+428a7c1b38d2c (Jez Ng                 2021-07-17 13:42:26 -0400 1020)     ConcatOutputSection *osec = cast<ConcatOutputSection>(isec->parent);
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400 1021)     osec->addInput(isec);
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400 1022)     osec->inputOrder =
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400 1023)         std::min(osec->inputOrder, static_cast<int>(isec->outSecOff));
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700 1024)   }
+db157d27337fc (Jez Ng                 2020-05-05 17:25:58 -0700 1025) 
+04259cde15a9f (Jez Ng                 2021-06-07 23:47:12 -0400 1026)   // Once all the inputs are added, we can finalize the output section
+04259cde15a9f (Jez Ng                 2021-06-07 23:47:12 -0400 1027)   // properties and create the corresponding output segments.
+33706191d88d3 (Jez Ng                 2021-05-25 14:57:16 -0400 1028)   for (const auto &it : concatOutputSections) {
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1029)     StringRef segname = it.first.first;
+33706191d88d3 (Jez Ng                 2021-05-25 14:57:16 -0400 1030)     ConcatOutputSection *osec = it.second;
+3a11528d97a78 (Jez Ng                 2021-07-01 20:33:42 -0400 1031)     assert(segname != segment_names::ld);
+e183bf8e1599d (Jez Ng                 2022-06-12 21:56:45 -0400 1032)     if (osec->isNeeded()) {
+e183bf8e1599d (Jez Ng                 2022-06-12 21:56:45 -0400 1033)       // See comment in ObjFile::splitEhFrames()
+e183bf8e1599d (Jez Ng                 2022-06-12 21:56:45 -0400 1034)       if (osec->name == section_names::ehFrame &&
+e183bf8e1599d (Jez Ng                 2022-06-12 21:56:45 -0400 1035)           segname == segment_names::text)
+e183bf8e1599d (Jez Ng                 2022-06-12 21:56:45 -0400 1036)         osec->align = target->wordSize;
+e183bf8e1599d (Jez Ng                 2022-06-12 21:56:45 -0400 1037) 
+d2f3d7bad26ac (Daniel Bertalan        2022-09-24 21:10:31 +0200 1038)       // MC keeps the default 1-byte alignment for __thread_vars, even though it
+d2f3d7bad26ac (Daniel Bertalan        2022-09-24 21:10:31 +0200 1039)       // contains pointers that are fixed up by dyld, which requires proper
+d2f3d7bad26ac (Daniel Bertalan        2022-09-24 21:10:31 +0200 1040)       // alignment.
+d2f3d7bad26ac (Daniel Bertalan        2022-09-24 21:10:31 +0200 1041)       if (isThreadLocalVariables(osec->flags))
+d2f3d7bad26ac (Daniel Bertalan        2022-09-24 21:10:31 +0200 1042)         osec->align = std::max<uint32_t>(osec->align, target->wordSize);
+d2f3d7bad26ac (Daniel Bertalan        2022-09-24 21:10:31 +0200 1043) 
+428a7c1b38d2c (Jez Ng                 2021-07-17 13:42:26 -0400 1044)       getOrCreateOutputSegment(segname)->addOutputSection(osec);
+e183bf8e1599d (Jez Ng                 2022-06-12 21:56:45 -0400 1045)     }
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1046)   }
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1047) 
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1048)   for (SyntheticSection *ssec : syntheticSections) {
+33706191d88d3 (Jez Ng                 2021-05-25 14:57:16 -0400 1049)     auto it = concatOutputSections.find({ssec->segname, ssec->name});
+b7e12ca7aab73 (Jez Ng                 2021-10-27 14:58:15 -0400 1050)     // We add all LinkEdit sections here because we don't know if they are
+b7e12ca7aab73 (Jez Ng                 2021-10-27 14:58:15 -0400 1051)     // needed until their finalizeContents() methods get called later. While
+b7e12ca7aab73 (Jez Ng                 2021-10-27 14:58:15 -0400 1052)     // this means that we add some redundant sections to __LINKEDIT, there is
+b7e12ca7aab73 (Jez Ng                 2021-10-27 14:58:15 -0400 1053)     // is no redundancy in the output, as we do not emit section headers for
+b7e12ca7aab73 (Jez Ng                 2021-10-27 14:58:15 -0400 1054)     // any LinkEdit sections.
+b7e12ca7aab73 (Jez Ng                 2021-10-27 14:58:15 -0400 1055)     if (ssec->isNeeded() || ssec->segname == segment_names::linkEdit) {
+04259cde15a9f (Jez Ng                 2021-06-07 23:47:12 -0400 1056)       if (it == concatOutputSections.end()) {
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1057)         getOrCreateOutputSegment(ssec->segname)->addOutputSection(ssec);
+04259cde15a9f (Jez Ng                 2021-06-07 23:47:12 -0400 1058)       } else {
+f6b6e7214366f (Jez Ng                 2021-07-01 20:33:55 -0400 1059)         fatal("section from " +
+f6b6e7214366f (Jez Ng                 2021-07-01 20:33:55 -0400 1060)               toString(it->second->firstSection()->getFile()) +
+04259cde15a9f (Jez Ng                 2021-06-07 23:47:12 -0400 1061)               " conflicts with synthetic section " + ssec->segname + "," +
+04259cde15a9f (Jez Ng                 2021-06-07 23:47:12 -0400 1062)               ssec->name);
+04259cde15a9f (Jez Ng                 2021-06-07 23:47:12 -0400 1063)       }
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1064)     }
+db157d27337fc (Jez Ng                 2020-05-05 17:25:58 -0700 1065)   }
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1066) 
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1067)   // dyld requires __LINKEDIT segment to always exist (even if empty).
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1068)   linkEditSegment = getOrCreateOutputSegment(segment_names::linkEdit);
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1069) }
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1070) 
+d9065fe8ea643 (Jez Ng                 2021-04-07 19:55:45 -0400 1071) void Writer::finalizeAddresses() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1072)   TimeTraceScope timeScope("Finalize addresses");
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1073)   uint64_t pageSize = target->getPageSize();
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1074) 
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1075)   // We could parallelize this loop, but local benchmarking indicates it is
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1076)   // faster to do it all in the main thread.
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1077)   for (OutputSegment *seg : outputSegments) {
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1078)     if (seg == linkEditSegment)
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1079)       continue;
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1080)     for (OutputSection *osec : seg->getSections()) {
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1081)       if (!osec->isNeeded())
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1082)         continue;
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1083)       // Other kinds of OutputSections have already been finalized.
+c4d9df9f78f31 (Jez Ng                 2023-04-05 01:48:34 -0400 1084)       if (auto *concatOsec = dyn_cast<ConcatOutputSection>(osec))
+c0ec1036d6532 (Vy Nguyen              2022-05-24 07:59:18 +0700 1085)         concatOsec->finalizeContents();
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1086)     }
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1087)   }
+b440c25742749 (Jez Ng                 2022-04-07 18:13:27 -0400 1088) 
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1089)   // Ensure that segments (and the sections they contain) are allocated
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1090)   // addresses in ascending order, which dyld requires.
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1091)   //
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1092)   // Note that at this point, __LINKEDIT sections are empty, but we need to
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1093)   // determine addresses of other segments/sections before generating its
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1094)   // contents.
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1095)   for (OutputSegment *seg : outputSegments) {
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1096)     if (seg == linkEditSegment)
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1097)       continue;
+9482aa98e5514 (Nico Weber             2021-07-23 10:19:06 -0400 1098)     seg->addr = addr;
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1099)     assignAddresses(seg);
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1100)     // codesign / libstuff checks for segment ordering by verifying that
+dd4a9c463b35e (Jez Ng                 2023-03-03 10:22:40 -0800 1101)     // `fileOff + fileSize == next segment fileOff`. So we call
+dd4a9c463b35e (Jez Ng                 2023-03-03 10:22:40 -0800 1102)     // alignToPowerOf2() before (instead of after) computing fileSize to ensure
+dd4a9c463b35e (Jez Ng                 2023-03-03 10:22:40 -0800 1103)     // that the segments are contiguous. We handle addr / vmSize similarly for
+dd4a9c463b35e (Jez Ng                 2023-03-03 10:22:40 -0800 1104)     // the same reason.
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500 1105)     fileOff = alignToPowerOf2(fileOff, pageSize);
+a0c01f05cdbe4 (Jez Ng                 2023-01-11 17:13:33 -0500 1106)     addr = alignToPowerOf2(addr, pageSize);
+9482aa98e5514 (Nico Weber             2021-07-23 10:19:06 -0400 1107)     seg->vmSize = addr - seg->addr;
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1108)     seg->fileSize = fileOff - seg->fileOff;
+80caa1eb4a0ea (Nico Weber             2021-07-23 10:12:55 -0400 1109)     seg->assignAddressesToStartEndSymbols();
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1110)   }
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1111) }
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1112) 
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1113) void Writer::finalizeLinkEditSegment() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1114)   TimeTraceScope timeScope("Finalize __LINKEDIT segment");
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1115)   // Fill __LINKEDIT contents.
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1116)   std::array<LinkEditSection *, 10> linkEditSections{
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1117)       in.rebase,         in.binding,
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1118)       in.weakBinding,    in.lazyBinding,
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1119)       in.exports,        in.chainedFixups,
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1120)       symtabSection,     indirectSymtabSection,
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1121)       dataInCodeSection, functionStartsSection,
+d9065fe8ea643 (Jez Ng                 2021-04-07 19:55:45 -0400 1122)   };
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1123) 
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1124)   parallelForEach(linkEditSections.begin(), linkEditSections.end(),
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1125)                   [](LinkEditSection *osec) {
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1126)                     if (osec)
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1127)                       osec->finalizeContents();
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1128)                   });
+45cdceb40c565 (Jez Ng                 2021-03-22 17:38:52 -0400 1129) 
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1130)   // Now that __LINKEDIT is filled out, do a proper calculation of its
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1131)   // addresses and offsets.
+9482aa98e5514 (Nico Weber             2021-07-23 10:19:06 -0400 1132)   linkEditSegment->addr = addr;
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1133)   assignAddresses(linkEditSegment);
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1134)   // No need to page-align fileOff / addr here since this is the last segment.
+9482aa98e5514 (Nico Weber             2021-07-23 10:19:06 -0400 1135)   linkEditSegment->vmSize = addr - linkEditSegment->addr;
+bb62ef9943008 (Jez Ng                 2021-04-20 16:58:07 -0400 1136)   linkEditSegment->fileSize = fileOff - linkEditSegment->fileOff;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700 1137) }
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700 1138) 
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700 1139) void Writer::assignAddresses(OutputSegment *seg) {
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700 1140)   seg->fileOff = fileOff;
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700 1141) 
+3a9d2f1488f0a (Greg McGary            2021-01-19 07:44:42 -0800 1142)   for (OutputSection *osec : seg->getSections()) {
+d32e32500f926 (Jez Ng                 2020-07-28 09:56:55 -0700 1143)     if (!osec->isNeeded())
+d32e32500f926 (Jez Ng                 2020-07-28 09:56:55 -0700 1144)       continue;
+dd4a9c463b35e (Jez Ng                 2023-03-03 10:22:40 -0800 1145)     addr = alignToPowerOf2(addr, osec->align);
+dd4a9c463b35e (Jez Ng                 2023-03-03 10:22:40 -0800 1146)     fileOff = alignToPowerOf2(fileOff, osec->align);
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1147)     osec->addr = addr;
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1148)     osec->fileOff = isZeroFill(osec->flags) ? 0 : fileOff;
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1149)     osec->finalize();
+04e8d0b62dca0 (Nico Weber             2021-07-15 12:54:42 -0400 1150)     osec->assignAddressesToStartEndSymbols();
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700 1151) 
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1152)     addr += osec->getSize();
+3646ee503dfb8 (Jez Ng                 2020-06-15 00:03:24 -0700 1153)     fileOff += osec->getFileSize();
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700 1154)   }
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700 1155) }
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700 1156) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1157) void Writer::openFile() {
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1158)   Expected<std::unique_ptr<FileOutputBuffer>> bufferOrErr =
+6f63216c3d645 (Jez Ng                 2020-04-27 12:50:59 -0700 1159)       FileOutputBuffer::create(config->outputFile, fileOff,
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1160)                                FileOutputBuffer::F_executable);
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1161) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1162)   if (!bufferOrErr)
+a552fb2a86dba (Jez Ng                 2022-02-28 21:56:38 -0500 1163)     fatal("failed to open " + config->outputFile + ": " +
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1164)           llvm::toString(bufferOrErr.takeError()));
+a552fb2a86dba (Jez Ng                 2022-02-28 21:56:38 -0500 1165)   buffer = std::move(*bufferOrErr);
+a552fb2a86dba (Jez Ng                 2022-02-28 21:56:38 -0500 1166)   in.bufferStart = buffer->getBufferStart();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1167) }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1168) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1169) void Writer::writeSections() {
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1170)   TimeTraceScope timeScope("Write output sections");
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1171) 
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1172)   uint8_t *buf = buffer->getBufferStart();
+44978a234b8e2 (Michael Eisel          2022-06-08 20:09:48 -0400 1173)   std::vector<const OutputSection *> osecs;
+98fe9e41f7a61 (Greg McGary            2021-03-09 21:41:34 -0800 1174)   for (const OutputSegment *seg : outputSegments)
+44978a234b8e2 (Michael Eisel          2022-06-08 20:09:48 -0400 1175)     append_range(osecs, seg->getSections());
+44978a234b8e2 (Michael Eisel          2022-06-08 20:09:48 -0400 1176) 
+44978a234b8e2 (Michael Eisel          2022-06-08 20:09:48 -0400 1177)   parallelForEach(osecs.begin(), osecs.end(), [&](const OutputSection *osec) {
+44978a234b8e2 (Michael Eisel          2022-06-08 20:09:48 -0400 1178)     osec->writeTo(buf + osec->fileOff);
+44978a234b8e2 (Michael Eisel          2022-06-08 20:09:48 -0400 1179)   });
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1180) }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1181) 
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1182) void Writer::applyOptimizationHints() {
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1183)   if (config->arch() != AK_arm64 || config->ignoreOptimizationHints)
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1184)     return;
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1185) 
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1186)   uint8_t *buf = buffer->getBufferStart();
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1187)   TimeTraceScope timeScope("Apply linker optimization hints");
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1188)   parallelForEach(inputFiles, [buf](const InputFile *file) {
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1189)     if (const auto *objFile = dyn_cast<ObjFile>(file))
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1190)       target->applyOptimizationHints(buf, *objFile);
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1191)   });
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1192) }
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1193) 
+9b6dde8af8f08 (Jez Ng                 2021-03-31 15:48:18 -0400 1194) // In order to utilize multiple cores, we first split the buffer into chunks,
+9b6dde8af8f08 (Jez Ng                 2021-03-31 15:48:18 -0400 1195) // compute a hash for each chunk, and then compute a hash value of the hash
+9b6dde8af8f08 (Jez Ng                 2021-03-31 15:48:18 -0400 1196) // values.
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700 1197) void Writer::writeUuid() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1198)   TimeTraceScope timeScope("Computing UUID");
+d17b092fe690e (Vincent Lee            2021-12-08 18:25:20 -0800 1199) 
+9b6dde8af8f08 (Jez Ng                 2021-03-31 15:48:18 -0400 1200)   ArrayRef<uint8_t> data{buffer->getBufferStart(), buffer->getBufferEnd()};
+359f170f5f712 (Fangrui Song           2023-07-19 17:24:36 -0700 1201)   std::vector<ArrayRef<uint8_t>> chunks = split(data, 1024 * 1024);
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1202) 
+a9e325116ca81 (Leonard Grey           2022-03-31 14:49:12 -0400 1203)   // Leave one slot for filename
+a9e325116ca81 (Leonard Grey           2022-03-31 14:49:12 -0400 1204)   std::vector<uint64_t> hashes(chunks.size() + 1);
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1205)   parallelFor(0, chunks.size(),
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1206)               [&](size_t i) { hashes[i] = xxh3_64bits(chunks[i]); });
+a9e325116ca81 (Leonard Grey           2022-03-31 14:49:12 -0400 1207)   // Append the output filename so that identical binaries with different names
+a9e325116ca81 (Leonard Grey           2022-03-31 14:49:12 -0400 1208)   // don't get the same UUID.
+2090d66b2376f (Fangrui Song           2023-07-19 09:58:43 -0700 1209)   hashes[chunks.size()] = xxh3_64bits(sys::path::filename(config->finalOutput));
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1210) 
+2090d66b2376f (Fangrui Song           2023-07-19 09:58:43 -0700 1211)   uint64_t digest = xxh3_64bits({reinterpret_cast<uint8_t *>(hashes.data()),
+2090d66b2376f (Fangrui Song           2023-07-19 09:58:43 -0700 1212)                                  hashes.size() * sizeof(uint64_t)});
+9d6177c2a526d (Nico Weber             2020-12-09 21:04:22 -0500 1213)   uuidCommand->writeUuid(digest);
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700 1214) }
+b86908171ea81 (Jez Ng                 2020-10-14 11:03:34 -0700 1215) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1216) // This is step 5 of the algorithm described in the class comment of
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1217) // ChainedFixupsSection.
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1218) void Writer::buildFixupChains() {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1219)   if (!config->emitChainedFixups)
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1220)     return;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1221) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1222)   const std::vector<Location> &loc = in.chainedFixups->getLocations();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1223)   if (loc.empty())
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1224)     return;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1225) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1226)   TimeTraceScope timeScope("Build fixup chains");
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1227) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1228)   const uint64_t pageSize = target->getPageSize();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1229)   constexpr uint32_t stride = 4; // for DYLD_CHAINED_PTR_64
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1230) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1231)   for (size_t i = 0, count = loc.size(); i < count;) {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1232)     const OutputSegment *oseg = loc[i].isec->parent->parent;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1233)     uint8_t *buf = buffer->getBufferStart() + oseg->fileOff;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1234)     uint64_t pageIdx = loc[i].offset / pageSize;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1235)     ++i;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1236) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1237)     while (i < count && loc[i].isec->parent->parent == oseg &&
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1238)            (loc[i].offset / pageSize) == pageIdx) {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1239)       uint64_t offset = loc[i].offset - loc[i - 1].offset;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1240) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1241)       auto fail = [&](Twine message) {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1242)         error(loc[i].isec->getSegName() + "," + loc[i].isec->getName() +
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1243)               ", offset " +
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1244)               Twine(loc[i].offset - loc[i].isec->parent->getSegmentOffset()) +
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1245)               ": " + message);
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1246)       };
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1247) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1248)       if (offset < target->wordSize)
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1249)         return fail("fixups overlap");
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1250)       if (offset % stride != 0)
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1251)         return fail(
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1252)             "fixups are unaligned (offset " + Twine(offset) +
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1253)             " is not a multiple of the stride). Re-link with -no_fixup_chains");
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1254) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1255)       // The "next" field is in the same location for bind and rebase entries.
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1256)       reinterpret_cast<dyld_chained_ptr_64_bind *>(buf + loc[i - 1].offset)
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1257)           ->next = offset / stride;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1258)       ++i;
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1259)     }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1260)   }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1261) }
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1262) 
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800 1263) void Writer::writeCodeSignature() {
+0ec87addb7d17 (Nico Weber             2022-06-22 10:58:33 -0400 1264)   if (codeSignatureSection) {
+0ec87addb7d17 (Nico Weber             2022-06-22 10:58:33 -0400 1265)     TimeTraceScope timeScope("Write code signature");
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800 1266)     codeSignatureSection->writeHashes(buffer->getBufferStart());
+0ec87addb7d17 (Nico Weber             2022-06-22 10:58:33 -0400 1267)   }
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800 1268) }
+151990dd94e50 (Greg McGary            2021-01-06 18:11:44 -0800 1269) 
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1270) void Writer::writeOutputFile() {
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1271)   TimeTraceScope timeScope("Write output file");
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1272)   openFile();
+0eec7e2a89abc (Daniel Bertalan        2022-06-15 19:17:07 -0400 1273)   reportPendingUndefinedSymbols();
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1274)   if (errorCount())
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1275)     return;
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1276)   writeSections();
+a8843ec95295a (Daniel Bertalan        2022-09-05 19:03:15 +0200 1277)   applyOptimizationHints();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1278)   buildFixupChains();
+f317ce218e75a (Keith Smiley           2023-07-19 11:07:57 -0700 1279)   if (config->generateUuid)
+f317ce218e75a (Keith Smiley           2023-07-19 11:07:57 -0700 1280)     writeUuid();
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1281)   writeCodeSignature();
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1282) 
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1283)   if (auto e = buffer->commit())
+cd7ffa2e52ce1 (Nico Weber             2022-09-01 10:01:54 -0400 1284)     fatal("failed to write output '" + buffer->getPath() +
+cd7ffa2e52ce1 (Nico Weber             2022-09-01 10:01:54 -0400 1285)           "': " + toString(std::move(e)));
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1286) }
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1287) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400 1288) template <class LP> void Writer::run() {
+9d43c000e1b8d (Nico Weber             2021-07-22 10:31:39 -0400 1289)   treatSpecialUndefineds();
+6b6d1abb10216 (Daniel Bertalan        2022-08-14 15:42:21 +0200 1290)   if (config->entry && needsBinding(config->entry))
+6b6d1abb10216 (Daniel Bertalan        2022-08-14 15:42:21 +0200 1291)     in.stubs->addEntry(config->entry);
+3e951808d5389 (Jez Ng                 2022-02-01 13:45:38 -0500 1292) 
+a271f2410f6c6 (Jez Ng                 2021-10-29 11:00:13 -0400 1293)   // Canonicalization of all pointers to InputSections should be handled by
+3e951808d5389 (Jez Ng                 2022-02-01 13:45:38 -0500 1294)   // these two scan* methods. I.e. from this point onward, for all live
+3e951808d5389 (Jez Ng                 2022-02-01 13:45:38 -0500 1295)   // InputSections, we should have `isec->canonical() == isec`.
+002eda7056af5 (Jez Ng                 2021-10-26 16:04:04 -0400 1296)   scanSymbols();
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700 1297)   if (in.objcStubs->isNeeded())
+ae5d5426fb7e0 (Daniel Bertalan        2022-08-30 17:57:32 +0200 1298)     in.objcStubs->setUp();
+742a82a729925 (alx32                  2024-03-27 14:34:27 -0700 1299)   if (in.objcMethList->isNeeded())
+742a82a729925 (alx32                  2024-03-27 14:34:27 -0700 1300)     in.objcMethList->setUp();
+6cb073133c564 (Kellie Medlin          2020-05-01 16:29:06 -0700 1301)   scanRelocations();
+389e0a81a15ca (Daniel Bertalan        2022-08-30 16:54:04 +0200 1302)   if (in.initOffsets->isNeeded())
+389e0a81a15ca (Daniel Bertalan        2022-08-30 16:54:04 +0200 1303)     in.initOffsets->setUp();
+c15b5888527bc (Nico Weber             2021-09-01 14:28:51 -0400 1304) 
+58edaef3fe08b (Vincent Lee            2022-09-27 23:42:47 -0700 1305)   // Do not proceed if there were undefined or duplicate symbols.
+0eec7e2a89abc (Daniel Bertalan        2022-06-15 19:17:07 -0400 1306)   reportPendingUndefinedSymbols();
+58edaef3fe08b (Vincent Lee            2022-09-27 23:42:47 -0700 1307)   reportPendingDuplicateSymbols();
+c15b5888527bc (Nico Weber             2021-09-01 14:28:51 -0400 1308)   if (errorCount())
+c15b5888527bc (Nico Weber             2021-09-01 14:28:51 -0400 1309)     return;
+c15b5888527bc (Nico Weber             2021-09-01 14:28:51 -0400 1310) 
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1311)   if (in.stubHelper && in.stubHelper->isNeeded())
+ae5d5426fb7e0 (Daniel Bertalan        2022-08-30 17:57:32 +0200 1312)     in.stubHelper->setUp();
+d23da0ec6c539 (Jez Ng                 2022-07-23 12:11:46 -0400 1313) 
+d23da0ec6c539 (Jez Ng                 2022-07-23 12:11:46 -0400 1314)   if (in.objCImageInfo->isNeeded())
+d23da0ec6c539 (Jez Ng                 2022-07-23 12:11:46 -0400 1315)     in.objCImageInfo->finalizeContents();
+d23da0ec6c539 (Jez Ng                 2022-07-23 12:11:46 -0400 1316) 
+3e951808d5389 (Jez Ng                 2022-02-01 13:45:38 -0500 1317)   // At this point, we should know exactly which output sections are needed,
+3e951808d5389 (Jez Ng                 2022-02-01 13:45:38 -0500 1318)   // courtesy of scanSymbols() and scanRelocations().
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400 1319)   createOutputSections<LP>();
+c15b5888527bc (Nico Weber             2021-09-01 14:28:51 -0400 1320) 
+93c8559baf551 (Greg McGary            2021-03-29 17:33:48 -0700 1321)   // After this point, we create no new segments; HOWEVER, we might
+93c8559baf551 (Greg McGary            2021-03-29 17:33:48 -0700 1322)   // yet create branch-range extension thunks for architectures whose
+93c8559baf551 (Greg McGary            2021-03-29 17:33:48 -0700 1323)   // hardware call instructions have limited range, e.g., ARM(64).
+93c8559baf551 (Greg McGary            2021-03-29 17:33:48 -0700 1324)   // The thunks are created as InputSections interspersed among
+93c8559baf551 (Greg McGary            2021-03-29 17:33:48 -0700 1325)   // the ordinary __TEXT,_text InputSections.
+55e9eb416ee5a (Jez Ng                 2020-05-05 16:37:34 -0700 1326)   sortSegmentsAndSections();
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400 1327)   createLoadCommands<LP>();
+d9065fe8ea643 (Jez Ng                 2021-04-07 19:55:45 -0400 1328)   finalizeAddresses();
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1329) 
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1330)   llvm::thread mapFileWriter([&] {
+e976c457c5a37 (Jez Ng                 2022-01-11 17:45:07 -0800 1331)     if (LLVM_ENABLE_THREADS && config->timeTraceEnabled)
+e976c457c5a37 (Jez Ng                 2022-01-11 17:45:07 -0800 1332)       timeTraceProfilerInitialize(config->timeTraceGranularity, "writeMapFile");
+e976c457c5a37 (Jez Ng                 2022-01-11 17:45:07 -0800 1333)     writeMapFile();
+e976c457c5a37 (Jez Ng                 2022-01-11 17:45:07 -0800 1334)     if (LLVM_ENABLE_THREADS && config->timeTraceEnabled)
+e976c457c5a37 (Jez Ng                 2022-01-11 17:45:07 -0800 1335)       timeTraceProfilerFinishThread();
+e976c457c5a37 (Jez Ng                 2022-01-11 17:45:07 -0800 1336)   });
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1337) 
+74b888baaddc7 (Greg McGary            2021-03-14 15:35:27 -0700 1338)   finalizeLinkEditSegment();
+4bcaafeb0e82c (Jez Ng                 2021-03-25 14:39:44 -0400 1339)   writeOutputFile();
+f18fd6e3f9c38 (Daniel Bertalan        2024-07-22 08:13:07 +0200 1340)   mapFileWriter.join();
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1341) }
+6acd3003755db (Fangrui Song           2020-04-02 11:54:05 -0700 1342) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400 1343) template <class LP> void macho::writeResult() { Writer().run<LP>(); }
+060efd24c7f06 (Jez Ng                 2020-04-21 13:37:57 -0700 1344) 
+0f6d720f1f485 (Shoaib Meenai          2021-10-30 16:35:30 -0700 1345) void macho::resetWriter() { LCDylib::resetInstanceCount(); }
+0f6d720f1f485 (Shoaib Meenai          2021-10-30 16:35:30 -0700 1346) 
+001ba65375f79 (Jez Ng                 2021-05-03 18:31:23 -0400 1347) void macho::createSyntheticSections() {
+001ba65375f79 (Jez Ng                 2021-05-03 18:31:23 -0400 1348)   in.header = make<MachHeaderSection>();
+2e5989e8140d4 (Keith Smiley           2022-12-21 15:48:28 -0800 1349)   if (config->dedupStrings)
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700 1350)     in.cStringSection =
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700 1351)         make<DeduplicatedCStringSection>(section_names::cString);
+3e951808d5389 (Jez Ng                 2022-02-01 13:45:38 -0500 1352)   else
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700 1353)     in.cStringSection = make<CStringSection>(section_names::cString);
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700 1354)   in.objcMethnameSection =
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700 1355)       make<DeduplicatedCStringSection>(section_names::objcMethname);
+2e5989e8140d4 (Keith Smiley           2022-12-21 15:48:28 -0800 1356)   in.wordLiteralSection = make<WordLiteralSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1357)   if (config->emitChainedFixups) {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1358)     in.chainedFixups = make<ChainedFixupsSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1359)   } else {
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1360)     in.rebase = make<RebaseSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1361)     in.binding = make<BindingSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1362)     in.weakBinding = make<WeakBindingSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1363)     in.lazyBinding = make<LazyBindingSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1364)     in.lazyPointers = make<LazyPointerSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1365)     in.stubHelper = make<StubHelperSection>();
+0d30e92f59589 (Daniel Bertalan        2022-08-15 09:26:28 +0200 1366)   }
+3da2130e45a4b (Jez Ng                 2020-08-27 15:59:15 -0700 1367)   in.exports = make<ExportSection>();
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700 1368)   in.got = make<GotSection>();
+3c9100fb785c4 (Jez Ng                 2020-08-12 19:50:09 -0700 1369)   in.tlvPointers = make<TlvPointerSection>();
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700 1370)   in.stubs = make<StubsSection>();
+3c24fae3986ae (Keith Smiley           2022-06-16 21:35:18 -0700 1371)   in.objcStubs = make<ObjCStubsSection>();
+1460942c15a71 (Jez Ng                 2021-04-15 21:14:33 -0400 1372)   in.unwindInfo = makeUnwindInfoSection();
+d23da0ec6c539 (Jez Ng                 2022-07-23 12:11:46 -0400 1373)   in.objCImageInfo = make<ObjCImageInfoSection>();
+389e0a81a15ca (Daniel Bertalan        2022-08-30 16:54:04 +0200 1374)   in.initOffsets = make<InitOffsetsSection>();
+742a82a729925 (alx32                  2024-03-27 14:34:27 -0700 1375)   in.objcMethList = make<ObjCMethListSection>();
+c5c05ffa45622 (Jez Ng                 2021-06-13 19:43:36 -0400 1376) 
+c5c05ffa45622 (Jez Ng                 2021-06-13 19:43:36 -0400 1377)   // This section contains space for just a single word, and will be used by
+c5c05ffa45622 (Jez Ng                 2021-06-13 19:43:36 -0400 1378)   // dyld to cache an address to the image loader it uses.
+83d59e05b2017 (Alexandre Ganea        2022-01-20 14:53:18 -0500 1379)   uint8_t *arr = bAlloc().Allocate<uint8_t>(target->wordSize);
+9c5d43fb55132 (Jez Ng                 2021-06-13 23:30:33 -0400 1380)   memset(arr, 0, target->wordSize);
+2b78ef06c2cd6 (Jez Ng                 2022-02-03 19:53:29 -0500 1381)   in.imageLoaderCache = makeSyntheticInputSection(
+2b78ef06c2cd6 (Jez Ng                 2022-02-03 19:53:29 -0500 1382)       segment_names::data, section_names::data, S_REGULAR,
+9c5d43fb55132 (Jez Ng                 2021-06-13 23:30:33 -0400 1383)       ArrayRef<uint8_t>{arr, target->wordSize},
+2b78ef06c2cd6 (Jez Ng                 2022-02-03 19:53:29 -0500 1384)       /*align=*/target->wordSize);
+bbfa50696e43f (alx32                  2024-03-27 17:27:51 -0700 1385)   assert(in.imageLoaderCache->live);
+b3e2fc931d2e0 (Jez Ng                 2020-05-05 17:38:10 -0700 1386) }
+daaaed6bb8904 (Jez Ng                 2021-01-08 18:47:40 -0500 1387) 
+daaaed6bb8904 (Jez Ng                 2021-01-08 18:47:40 -0500 1388) OutputSection *macho::firstTLVDataSection = nullptr;
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400 1389) 
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400 1390) template void macho::writeResult<LP64>();
+817d98d84186c (Jez Ng                 2021-04-02 18:46:18 -0400 1391) template void macho::writeResult<ILP32>();
