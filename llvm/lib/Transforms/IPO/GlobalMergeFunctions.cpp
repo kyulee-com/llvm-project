@@ -36,9 +36,7 @@
 using namespace llvm;
 using namespace llvm::support;
 
-cl::opt<bool> EnableGlobalMergeFunc(
-    "enable-global-merge-func", cl::init(false), cl::Hidden,
-    cl::desc("enable global merge functions (default = off)"));
+extern cl::opt<bool> EnableGlobalMergeFunc;
 
 STATISTIC(NumMismatchedFunctionHashGlobalMergeFunction,
           "Number of mismatched function hash for global merge function");
