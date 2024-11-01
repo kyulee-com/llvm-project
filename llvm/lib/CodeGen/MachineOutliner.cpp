@@ -148,6 +148,13 @@ static cl::opt<bool> AppendContentHashToOutlinedName(
              "hash and for ordering the outlined functions."),
     cl::init(true));
 
+static cl::opt<bool> PublishEarlyCandidate("publish-early-candidate",
+                                           cl::Hidden,
+                                           cl::desc("Publish early candidate"),
+                                           cl::init(false));
+static cl::opt<bool> PublishAllCandidate("publish-all-candidate", cl::Hidden,
+                                         cl::desc("Publish all candidate"),
+                                         cl::init(false));
 namespace {
 
 /// Maps \p MachineInstrs to unsigned integers and stores the mappings.
@@ -529,6 +536,11 @@ struct MachineOutliner : public ModulePass {
   /// of candidates that have identical instruction sequences to \p MF.
   void computeAndPublishHashSequence(MachineFunction &MF, unsigned CandSize);
 
+  void publishHashSequenceForEarlyCandidate(
+      const std::vector<std::unique_ptr<OutlinedFunction>> &FunctionList);
+
+  void publishHashSequenceForAllCandidate(const Module &M);
+
   /// Initialize the outliner mode.
   void initializeOutlinerMode(const Module &M);
 
@@ -703,7 +715,8 @@ static SmallVector<MatchedEntry> getMatchedEntries(InstructionMapper &Mapper) {
       // Even with a match ending with a terminal, we continue finding
       // matches to populate all candidates.
       if (auto Count = CurrNode->Terminals)
-        MatchedEntries.emplace_back(I, J, *Count);
+        if (*Count >= 2)
+          MatchedEntries.emplace_back(I, J, *Count);
     }
   }
 
@@ -852,6 +865,98 @@ void MachineOutliner::findCandidates(
   }
 }
 
+void MachineOutliner::publishHashSequenceForAllCandidate(const Module &M) {
+  SmallVector<stable_hash> OutlinedHashSequence;
+  for (auto &F : M) {
+    MachineFunction *MF = MMI->getMachineFunction(F);
+    if (!MF) {
+      LLVM_DEBUG(dbgs() << "SKIP: Function does not have a MachineFunction\n");
+      continue;
+    }
+
+    const TargetInstrInfo *TII = MF->getSubtarget().getInstrInfo();
+    if (!RunOnAllFunctions && !TII->shouldOutlineFromFunctionByDefault(*MF)) {
+      LLVM_DEBUG(dbgs() << "SKIP: Target does not want to outline from "
+                           "function by default\n");
+      continue;
+    }
+
+    // We have a MachineFunction. Ask the target if it's suitable for outlining.
+    // If it isn't, then move on to the next Function in the module.
+    if (!TII->isFunctionSafeToOutlineFrom(*MF, OutlineFromLinkOnceODRs)) {
+      LLVM_DEBUG(dbgs() << "SKIP: " << MF->getName()
+                        << ": unsafe to outline from\n");
+      continue;
+    }
+
+    for (auto &MBB : *MF) {
+      for (auto MI = MBB.begin(); MI != MBB.end(); ++MI) {
+        if (MI->isDebugInstr())
+          continue;
+        stable_hash Hash = stableHashValue(*MI);
+        if (!Hash)
+          continue;
+
+        OutlinedHashSequence.clear();
+        OutlinedHashSequence.push_back(Hash);
+        unsigned Length = 1;
+        for (auto MJ = std::next(MI); MJ != MBB.end(); ++MJ) {
+          if (MJ->isDebugInstr())
+            continue;
+          stable_hash Hash = stableHashValue(*MJ);
+          if (!Hash) {
+            OutlinedHashSequence.clear();
+            break;
+          }
+          OutlinedHashSequence.push_back(Hash);
+          // We typically don't form a candidate across the call boundary,
+          // so just stop at the first call to limit the iterations.
+          // The maximum length of the candidate is 10, which should be
+          // adjustable depending on the target.
+          if (MJ->isCall() || ++Length >= 10)
+            break;
+        }
+        if (Length < 2)
+          continue;
+        StableHashAttempts++;
+        if (!OutlinedHashSequence.empty()) {
+          //errs() <<"publishing " << Length <<"\n";
+          LocalHashTree->insert({OutlinedHashSequence, 1});
+        }
+        else
+          StableHashDropped++;
+      }
+    }
+  }
+}
+
+void MachineOutliner::publishHashSequenceForEarlyCandidate(
+    const std::vector<std::unique_ptr<OutlinedFunction>> &FunctionList) {
+  SmallVector<stable_hash> OutlinedHashSequence;
+  for (auto &OF : FunctionList) {
+    OutlinedHashSequence.clear();
+    auto &Candidates = OF->Candidates;
+    assert(!Candidates.empty());
+    auto &FirstCand = Candidates.front();
+    for (auto &MI : FirstCand) {
+      if (MI.isDebugInstr())
+        continue;
+      stable_hash Hash = stableHashValue(MI);
+      if (!Hash) {
+        OutlinedHashSequence.clear();
+        break;
+      }
+      OutlinedHashSequence.push_back(Hash);
+    }
+
+    StableHashAttempts++;
+    if (!OutlinedHashSequence.empty())
+      LocalHashTree->insert({OutlinedHashSequence, Candidates.size()});
+    else
+      StableHashDropped++;
+  }
+}
+
 void MachineOutliner::computeAndPublishHashSequence(MachineFunction &MF,
                                                     unsigned CandSize) {
   // Compute the hash sequence for the outlined function.
@@ -876,10 +981,12 @@ void MachineOutliner::computeAndPublishHashSequence(MachineFunction &MF,
   }
 
   // Publish the non-empty hash sequence to the local hash tree.
-  if (OutlinerMode == CGDataMode::Write) {
+  //if (!PublishEarlyCandidate && !PublishAllCandidate &&
+  if (
+      OutlinerMode == CGDataMode::Write) {
     StableHashAttempts++;
     if (!OutlinedHashSequence.empty())
-      LocalHashTree->insert({OutlinedHashSequence, CandSize});
+      LocalHashTree->insert({OutlinedHashSequence, CandSize - 1});
     else
       StableHashDropped++;
   }
@@ -1353,7 +1460,9 @@ void MachineOutliner::initializeOutlinerMode(const Module &M) {
 
 void MachineOutliner::emitOutlinedHashTree(Module &M) {
   assert(LocalHashTree);
+  //errs() <<"emit tree\n";
   if (!LocalHashTree->empty()) {
+    //errs() <<"emit tree here\n";
     LLVM_DEBUG({
       dbgs() << "Emit outlined hash tree. Size: " << LocalHashTree->size()
              << "\n";
@@ -1390,8 +1499,11 @@ bool MachineOutliner::runOnModule(Module &M) {
   unsigned OutlinedFunctionNum = 0;
 
   OutlineRepeatedNum = 0;
-  if (!doOutline(M, OutlinedFunctionNum))
+  if (!doOutline(M, OutlinedFunctionNum)) {
+    if (OutlinerMode == CGDataMode::Write)
+    emitOutlinedHashTree(M);
     return false;
+  }
 
   for (unsigned I = 0; I < OutlinerReruns; ++I) {
     OutlinedFunctionNum = 0;
@@ -1404,7 +1516,7 @@ bool MachineOutliner::runOnModule(Module &M) {
       break;
     }
   }
-
+//errs()<<"outline done\n";
   if (OutlinerMode == CGDataMode::Write)
     emitOutlinedHashTree(M);
 
@@ -1438,8 +1550,15 @@ bool MachineOutliner::doOutline(Module &M, unsigned &OutlinedFunctionNum) {
   // Find all of the outlining candidates.
   if (OutlinerMode == CGDataMode::Read)
     findGlobalCandidates(Mapper, FunctionList);
-  else
+  else {
     findCandidates(Mapper, FunctionList);
+    if (OutlinerMode == CGDataMode::Write) {
+      if (PublishEarlyCandidate)
+        publishHashSequenceForEarlyCandidate(FunctionList);
+      if (PublishAllCandidate)
+        publishHashSequenceForAllCandidate(M);
+    }
+  }
 
   // If we've requested size remarks, then collect the MI counts of every
   // function before outlining, and the MI counts after outlining.
