@@ -444,22 +444,22 @@ bool GlobalMergeFunc::merge(Module &M, const StableFunctionMap *FunctionMap) {
         continue;
 
       auto hasValidSharedConst =
-          [&](StableFunctionMap::StableFunctionEntry *SF) {
+          [&](StableFunctionMap::StableFunctionEntry *SF, FunctionHashInfo &FHI) {
             for (auto &[Index, Hash] : *SF->IndexOperandHashMap) {
               auto [InstIndex, OpndIndex] = Index;
-              assert(InstIndex < FI.IndexInstruction->size());
-              auto *Inst = FI.IndexInstruction->lookup(InstIndex);
+              assert(InstIndex < FHI.IndexInstruction->size());
+              auto *Inst = FHI.IndexInstruction->lookup(InstIndex);
               if (!ignoreOp(Inst, OpndIndex))
                 return false;
             }
             return true;
           };
-      if (!hasValidSharedConst(RFS.get()))
+      if (!hasValidSharedConst(RFS.get(), FI))
         continue;
 
       for (auto &SF : SFS) {
         assert(SF->InstCount == FI.IndexInstruction->size());
-        assert(hasValidSharedConst(SF.get()));
+        assert(hasValidSharedConst(SF.get(), FI));
         // Check if there is any stable function that is compatiable with the
         // current one.
         if (!checkConstHashCompatible(*SF->IndexOperandHashMap,
