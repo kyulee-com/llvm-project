@@ -503,6 +503,102 @@ mlir::Type CIRGenTypes::convertType(QualType type) {
     break;
   }
 
+  //===--------------------------------------------------------------------===//
+  // Objective-C Types
+  //===--------------------------------------------------------------------===//
+  //
+  // ✨ OPTIMIZATION RESEARCH NOTE:
+  // We preserve ObjC type information here that LLVM IR loses!
+  //
+  // Traditional Clang → LLVM IR:
+  //   id, NSString*, MyClass* → ALL become i8*
+  //
+  // ClangIR preserves:
+  //   id               → !cir.objc.id
+  //   Class            → !cir.objc.class
+  //   NSString*        → !cir.objc.interface<"NSString">
+  //   id<NSCopying>    → !cir.objc.id (protocols lost for MVP, but type distinct from C*)
+  //
+  // This type distinction enables optimization passes to:
+  // 1. Devirtualize when receiver type is known (NSString* vs id)
+  // 2. Distinguish ObjC pointers from C pointers for alias analysis
+  // 3. Track object lifetimes for escape analysis
+  //
+  case Type::ObjCObjectPointer: {
+    const ObjCObjectPointerType *objcPtrTy = cast<ObjCObjectPointerType>(ty);
+
+    // Special case: 'id' type (any object)
+    if (objcPtrTy->isObjCIdType()) {
+      resultType = cir::ObjCIdType::get(&getMLIRContext());
+      break;
+    }
+
+    // Special case: 'Class' type
+    if (objcPtrTy->isObjCClassType()) {
+      resultType = cir::ObjCClassType::get(&getMLIRContext());
+      break;
+    }
+
+    // Special case: 'SEL' type (handled elsewhere, but check here)
+    if (objcPtrTy->isObjCSelType()) {
+      resultType = cir::ObjCSELType::get(&getMLIRContext());
+      break;
+    }
+
+    // Qualified id (e.g., id<NSCopying>) - treat as 'id' for now
+    // TODO(ObjC Optimization): Could preserve protocol information in type
+    // to enable protocol-based devirtualization
+    if (objcPtrTy->isObjCQualifiedIdType()) {
+      resultType = cir::ObjCIdType::get(&getMLIRContext());
+      break;
+    }
+
+    // Qualified Class (e.g., Class<SomeProtocol>) - treat as 'Class'
+    if (objcPtrTy->isObjCQualifiedClassType()) {
+      resultType = cir::ObjCClassType::get(&getMLIRContext());
+      break;
+    }
+
+    // Specific interface type (e.g., NSString*, MyClass*)
+    // 🎯 KEY OPTIMIZATION OPPORTUNITY:
+    // Preserving the interface name enables devirtualization!
+    if (const ObjCObjectType *objTy = objcPtrTy->getObjectType()) {
+      if (const ObjCInterfaceDecl *interfaceDecl = objTy->getInterface()) {
+        std::string interfaceName = interfaceDecl->getNameAsString();
+        resultType = cir::ObjCInterfaceType::get(&getMLIRContext(), interfaceName);
+        break;
+      }
+    }
+
+    // Fallback: treat as 'id'
+    resultType = cir::ObjCIdType::get(&getMLIRContext());
+    break;
+  }
+
+  case Type::ObjCObject: {
+    // ObjCObject without pointer (rare - usually have ObjCObjectPointer)
+    // This can happen for value types in ObjC++
+    const ObjCObjectType *objTy = cast<ObjCObjectType>(ty);
+
+    if (const ObjCInterfaceDecl *interfaceDecl = objTy->getInterface()) {
+      std::string interfaceName = interfaceDecl->getNameAsString();
+      resultType = cir::ObjCInterfaceType::get(&getMLIRContext(), interfaceName);
+      break;
+    }
+
+    // Fallback
+    resultType = cir::ObjCIdType::get(&getMLIRContext());
+    break;
+  }
+
+  case Type::ObjCInterface: {
+    // Direct interface type (uncommon in modern ObjC)
+    const ObjCInterfaceType *ifaceType = cast<ObjCInterfaceType>(ty);
+    std::string interfaceName = ifaceType->getDecl()->getNameAsString();
+    resultType = cir::ObjCInterfaceType::get(&getMLIRContext(), interfaceName);
+    break;
+  }
+
   default:
     cgm.errorNYI(SourceLocation(), "processing of type",
                  type->getTypeClassName());
