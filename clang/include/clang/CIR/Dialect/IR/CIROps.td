@@ -4112,4 +4112,331 @@ def CIR_AtomicCmpXchg : CIR_Op<"atomic.cmpxchg", [
   let hasVerifier = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Objective-C Operations
+//===----------------------------------------------------------------------===//
+
+//
+// ✨ OPTIMIZATION RESEARCH NOTE ✨
+// ================================
+// These operations preserve high-level Objective-C semantics that are LOST
+// when lowering directly to objc_msgSend calls in LLVM IR.
+//
+// KEY INSIGHT: Traditional LLVM IR makes ObjC message sends completely opaque:
+//   call i8* @objc_msgSend(i8* %receiver, i8* %selector, ...)
+//   ↑ All type information gone! Can't tell:
+//      - What class the receiver is
+//      - What method is being called
+//      - What the return type is (until you parse the call site)
+//
+// ClangIR PRESERVES:
+//   1. Receiver type: !cir.objc.interface<"NSString"> vs !cir.objc.id
+//   2. Selector string: "length" vs "count" → enables pattern matching
+//   3. Message kind: instance vs class vs super
+//
+// OPTIMIZATION OPPORTUNITIES THIS ENABLES:
+//
+// 1. **Devirtualization** 🎯 (THE BIG ONE)
+//    If receiver type is known statically AND class/method is final/sealed:
+//    %str = ... : !cir.objc.interface<"NSString">
+//    %len = cir.objc.message %str, "length" : ... -> !s64i
+//
+//    Could transform to direct call:
+//    %len = cir.call @NSString_length(%str) : !s64i
+//
+//    This eliminates objc_msgSend overhead entirely!
+//
+// 2. **Selector Hoisting**
+//    Detect repeated selectors:
+//    cir.for ... {
+//      %r = cir.objc.message %obj, "count"  // <-- Same selector in loop!
+//    }
+//
+//    SEL lookup can be hoisted out of loop.
+//
+// 3. **Alloc/Init Pattern Recognition**
+//    Recognize this common pattern:
+//    %cls = cir.objc.class_ref "NSString"
+//    %obj = cir.objc.message %cls, "alloc" : ...
+//    %init = cir.objc.message %obj, "init" : ...
+//
+//    Could optimize to single allocation or inline it entirely.
+//
+// 4. **Nil-Receiver Optimization**
+//    ObjC semantics: message to nil returns 0/nil (no-op).
+//    If we can prove receiver is non-nil (e.g., fresh from alloc):
+//    - Skip nil check in objc_msgSend
+//    - Use faster calling convention
+//
+// 5. **Escape Analysis & Stack Allocation**
+//    Track object creation through messages:
+//    %obj = cir.objc.message %cls, "alloc"
+//    cir.objc.message %obj, "setValue:", ...
+//
+//    If object doesn't escape scope → could stack-allocate!
+//
+// 6. **Cross-Language Optimization** (with Swift SIL)
+//    If Swift and ObjC both in high-level IR:
+//    - Optimize across Swift/ObjC boundaries
+//    - See through bridging (String ↔ NSString)
+//    - Devirtualize even when crossing languages
+//
+// 🔬 RESEARCH TODO: Implement passes to measure these opportunities!
+//===----------------------------------------------------------------------===//
+
+def CIR_ObjCMessageOp : CIR_Op<"objc.message", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
+  let summary = "Objective-C message send operation";
+  let description = [{
+    Represents sending an Objective-C message: `[receiver selector:arg1 with:arg2]`
+
+    This operation preserves high-level ObjC semantics before lowering to
+    runtime calls (objc_msgSend, objc_msgSend_stret, etc.).
+
+    **CRITICAL: This is where we preserve optimization-enabling information:**
+
+    - `receiver`: Operand with preserved type (!cir.objc.interface<"NSString"> vs !cir.objc.id)
+    - `selector`: String attribute (enables pattern matching on method names)
+    - `receiverType`: Type attribute (redundant but cached for analyses)
+    - `isClassMessage`: Boolean (class vs instance affects devirtualization)
+
+    **Concrete Devirtualization Example:**
+    ```mlir
+    // Source: NSString *str = ...; [str length];
+    %str = ... : !cir.objc.interface<"NSString">
+    %len = cir.objc.message %str, "length" : (!cir.objc.interface<"NSString">) -> !s64i
+
+    // If NSString::length is known to be final (sealed class):
+    // Optimization pass could replace with:
+    %len = cir.call @NSString_length_impl(%str) : (!cir.objc.interface<"NSString">) -> !s64i
+    // ↑ Direct call! No dynamic dispatch overhead!
+    ```
+
+    **Alloc/Init Pattern Example:**
+    ```mlir
+    // Source: [[NSString alloc] initWithUTF8String:"hello"]
+    %cls = cir.objc.class_ref "NSString" : !cir.objc.class
+    %obj = cir.objc.message %cls, "alloc" : (!cir.objc.class) -> !cir.objc.interface<"NSString">
+    %str = cir.objc.message %obj, "initWithUTF8String:" (%cstr) :
+           (!cir.objc.interface<"NSString">, !cir.ptr<!s8i>) -> !cir.objc.interface<"NSString">
+
+    // Pattern matcher could recognize [[T alloc] init*] idiom
+    // and potentially:
+    // 1. Inline the allocation
+    // 2. Eliminate redundant retain/release if ARC
+    // 3. Stack-allocate if doesn't escape
+    ```
+
+    Basic examples:
+    ```mlir
+    // [obj doSomething]
+    %0 = cir.objc.message %receiver, "doSomething" :
+         (!cir.objc.id) -> !cir.objc.id
+
+    // [NSString stringWithUTF8String:"hello"]
+    %1 = cir.objc.message %class, "stringWithUTF8String:" (%str) :
+         (!cir.objc.class, !cir.ptr<!s8i>) -> !cir.objc.id
+    ```
+  }];
+
+  let arguments = (ins
+    CIR_AnyType:$receiver,            // receiver (id, Class, or interface type)
+    StrAttr:$selector,                // selector string (e.g., "doSomething")
+    Variadic<CIR_AnyType>:$arguments, // method arguments
+    TypeAttr:$receiverType,           // original receiver type (for metadata/optimization)
+    OptionalAttr<UnitAttr>:$isClassMessage // true for class messages
+  );
+
+  let results = (outs Optional<CIR_AnyType>:$result);
+
+  let assemblyFormat = [{
+    $receiver `,` $selector
+    (`(` $arguments^ `)` `:` `(` type($arguments) `)`)?
+    attr-dict `:` functional-type($receiver, results)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "mlir::Value":$receiver,
+                   "llvm::StringRef":$selector,
+                   "mlir::ValueRange":$arguments,
+                   "mlir::Type":$resultType,
+                   "mlir::Type":$receiverType,
+                   "bool":$isClassMessage), [{
+      build($_builder, $_state, resultType, receiver,
+            $_builder.getStringAttr(selector), arguments,
+            mlir::TypeAttr::get(receiverType),
+            isClassMessage ? $_builder.getUnitAttr() : mlir::UnitAttr());
+    }]>
+  ];
+}
+
+def CIR_ObjCMessageSuperOp : CIR_Op<"objc.message_super", [
+    DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+]> {
+  let summary = "Objective-C super message send";
+  let description = [{
+    Represents sending a message to super: `[super selector:arg]`
+
+    **🎯 OPTIMIZATION GOLD MINE: Super calls are EASIER to devirtualize!**
+
+    Why super messages are special for optimization:
+    1. **Statically Known Target**: We know EXACTLY which class to call
+       - currentClass is known at compile time
+       - superClass is known from class hierarchy
+       - Method resolution is DETERMINISTIC (no subclass can override)
+
+    2. **No Dynamic Dispatch Needed**: In theory, could replace:
+       objc_msgSendSuper(super, @selector(foo))
+       with:
+       SuperClass_foo_impl(self)  // Direct function call!
+
+    3. **Inlining Opportunity**: Since target is known, aggressive inlining
+       becomes possible.
+
+    Example optimization scenario:
+    ```mlir
+    // Source: @implementation MyClass ... [super dealloc]; ... @end
+    cir.func @MyClass_dealloc(%self: !cir.ptr<!cir.objc.interface<"MyClass">>) {
+      ...
+      cir.objc.message_super %self, "dealloc", "MyClass", "NSObject"
+        : (!cir.ptr<!cir.objc.interface<"MyClass">>) -> !cir.void
+      ...
+    }
+
+    // Since we know:
+    // - MyClass extends NSObject
+    // - Calling NSObject::dealloc
+    // - NSObject is a foundation class (stable ABI)
+    //
+    // Could devirtualize to:
+    cir.call @NSObject_dealloc(%self) : (!cir.ptr<!cir.objc.interface<"MyClass">>) -> !cir.void
+    // ↑ Direct call! Major win for hot paths in ObjC++
+    ```
+
+    **Research Measurement Idea:**
+    Count super messages in real codebases (iOS apps) - likely 5-10% of all messages.
+    Even 10% speedup on super calls = measurable app performance improvement!
+
+    Basic example:
+    ```mlir
+    // In MyClass::doSomething method:
+    %self = ... : !cir.ptr<!cir.objc.interface<"MyClass">>
+    cir.objc.message_super %self, "doSomething", "MyClass", "BaseClass"
+      : (!cir.ptr<!cir.objc.interface<"MyClass">>) -> !cir.void
+    ```
+  }];
+
+  let arguments = (ins
+    CIR_AnyType:$self,                // 'self' parameter
+    StrAttr:$selector,                // method selector
+    StrAttr:$currentClass,            // name of class containing this call
+    StrAttr:$superClass,              // name of superclass
+    Variadic<CIR_AnyType>:$arguments, // method arguments
+    OptionalAttr<UnitAttr>:$isClassMessage // true for class method
+  );
+
+  let results = (outs Optional<CIR_AnyType>:$result);
+
+  let assemblyFormat = [{
+    $self `,` $selector `,` $currentClass `,` $superClass
+    (`(` $arguments^ `)` `:` `(` type($arguments) `)`)?
+    attr-dict `:` functional-type($self, results)
+  }];
+}
+
+def CIR_ObjCSelRefOp : CIR_Op<"objc.sel_ref", [Pure]> {
+  let summary = "Reference to Objective-C selector";
+  let description = [{
+    Creates a reference to a selector, which will be registered with the
+    runtime via sel_registerName.
+
+    **OPTIMIZATION NOTE: Selectors are UNIQUE and IMMUTABLE**
+
+    Key properties that enable optimization:
+    1. Selectors are globally unique (interned strings)
+    2. sel_registerName("foo") always returns same pointer
+    3. Selector identity can be compared with pointer equality
+
+    Optimization opportunities:
+    ```mlir
+    // Before:
+    cir.for ... {
+      %sel = cir.objc.sel_ref "description" : !cir.objc.sel
+      %result = cir.objc.message %obj, "description" : ...
+    }
+
+    // Optimization: Hoist selector lookup out of loop
+    %sel = cir.objc.sel_ref "description" : !cir.objc.sel  // <-- MOVED
+    cir.for ... {
+      %result = cir.objc.message %obj, "description" : ...
+    }
+
+    // Better yet: Cache selectors at module initialization
+    cir.global @cached_sel_description = sel_registerName("description")
+    // Then use %cached_sel everywhere → eliminate runtime lookup entirely!
+    ```
+
+    Example:
+    ```mlir
+    %sel = cir.objc.sel_ref "description" : !cir.objc.sel
+    ```
+  }];
+
+  let arguments = (ins StrAttr:$name);
+  let results = (outs CIR_ObjCSELType:$result);
+
+  let assemblyFormat = [{
+    $name attr-dict `:` type($result)
+  }];
+}
+
+def CIR_ObjCClassRefOp : CIR_Op<"objc.class_ref", [Pure]> {
+  let summary = "Reference to Objective-C class";
+  let description = [{
+    Gets a reference to an Objective-C class by name.
+    Lowers to objc_getClass() runtime call.
+
+    **OPTIMIZATION: Class references could be cached!**
+
+    Current behavior (what LLVM IR does):
+    ```c
+    // Every call site does:
+    Class cls = objc_getClass("NSString");  // Runtime hash table lookup!
+    ```
+
+    Better approach with high-level IR:
+    ```mlir
+    // Detect pattern:
+    %cls1 = cir.objc.class_ref "NSString" : !cir.objc.class
+    ...
+    %cls2 = cir.objc.class_ref "NSString" : !cir.objc.class  // SAME class!
+
+    // Optimization pass could:
+    // 1. Hoist to module initialization
+    cir.global @cached_NSString_class = objc_getClass("NSString")
+
+    // 2. Replace all uses
+    %cls1 = cir.load @cached_NSString_class
+    %cls2 = cir.load @cached_NSString_class  // <-- Reuse cached value!
+    ```
+
+    Even better with whole-program optimization:
+    If we know the class layout, could replace class reference with
+    direct pointer to class metadata structure!
+
+    Example:
+    ```mlir
+    %class = cir.objc.class_ref "NSString" : !cir.objc.class
+    ```
+  }];
+
+  let arguments = (ins StrAttr:$name);
+  let results = (outs CIR_ObjCClassType:$result);
+
+  let assemblyFormat = [{
+    $name attr-dict `:` type($result)
+  }];
+}
+
 #endif // CLANG_CIR_DIALECT_IR_CIROPS_TD

@@ -1,0 +1,128 @@
+// RUN: cir-opt %s | cir-opt | FileCheck %s
+
+// Test that Objective-C operations in CIR parse and print correctly
+
+module {
+  // Test 1: Simple message send without arguments
+  // CHECK-LABEL: cir.func @test_message_no_args
+  cir.func @test_message_no_args(%obj: !cir.objc.id) -> !cir.objc.id {
+    // CHECK: [[RESULT:%.*]] = cir.objc.message %arg0, "description"
+    // CHECK-SAME: {receiverType = !cir.objc.id}
+    // CHECK-SAME: : (!cir.objc.id) -> !cir.objc.id
+    %result = cir.objc.message %obj, "description" {receiverType = !cir.objc.id} : (!cir.objc.id) -> !cir.objc.id
+
+    // CHECK: cir.return [[RESULT]]
+    cir.return %result : !cir.objc.id
+  }
+
+  // Test 2: Message send with arguments
+  // CHECK-LABEL: cir.func @test_message_with_args
+  cir.func @test_message_with_args(%obj: !cir.objc.interface<"MyClass">) -> !cir.int<s, 32> {
+    %x = cir.const #cir.int<10> : !cir.int<s, 32>
+    %y = cir.const #cir.int<20> : !cir.int<s, 32>
+
+    // CHECK: [[RESULT:%.*]] = cir.objc.message %arg0, "addX:andY:"([[X:%.*]], [[Y:%.*]]) : (!cir.int<s, 32>, !cir.int<s, 32>)
+    // CHECK-SAME: {receiverType = !cir.objc.interface<"MyClass">}
+    // CHECK-SAME: : (!cir.objc.interface<"MyClass">) -> !cir.int<s, 32>
+    %result = cir.objc.message %obj, "addX:andY:"(%x, %y) : (!cir.int<s, 32>, !cir.int<s, 32>)
+      {receiverType = !cir.objc.interface<"MyClass">}
+      : (!cir.objc.interface<"MyClass">) -> !cir.int<s, 32>
+
+    cir.return %result : !cir.int<s, 32>
+  }
+
+  // Test 3: Class message (isClassMessage attribute)
+  // CHECK-LABEL: cir.func @test_class_message
+  cir.func @test_class_message(%cls: !cir.objc.class) -> !cir.objc.id {
+    // CHECK: [[RESULT:%.*]] = cir.objc.message %arg0, "alloc"
+    // CHECK-SAME: {isClassMessage, receiverType = !cir.objc.class}
+    // CHECK-SAME: : (!cir.objc.class) -> !cir.objc.id
+    %obj = cir.objc.message %cls, "alloc"
+      {receiverType = !cir.objc.class, isClassMessage}
+      : (!cir.objc.class) -> !cir.objc.id
+
+    cir.return %obj : !cir.objc.id
+  }
+
+  // Test 4: Super message send
+  // CHECK-LABEL: cir.func @test_super_message
+  cir.func @test_super_message(%self: !cir.objc.interface<"MyClass">) {
+    // CHECK: cir.objc.message_super %arg0, "dealloc", "MyClass", "NSObject"
+    // CHECK-SAME: : (!cir.objc.interface<"MyClass">) -> ()
+    cir.objc.message_super %self, "dealloc", "MyClass", "NSObject"
+      : (!cir.objc.interface<"MyClass">) -> ()
+
+    cir.return
+  }
+
+  // Test 5: Super message with arguments
+  // CHECK-LABEL: cir.func @test_super_message_with_args
+  cir.func @test_super_message_with_args(%self: !cir.objc.interface<"MyClass">) {
+    %x = cir.const #cir.int<42> : !cir.int<s, 32>
+
+    // CHECK: cir.objc.message_super %arg0, "setX:", "MyClass", "BaseClass"([[ARG:%.*]]) : (!cir.int<s, 32>)
+    // CHECK-SAME: : (!cir.objc.interface<"MyClass">) -> ()
+    cir.objc.message_super %self, "setX:", "MyClass", "BaseClass"(%x) : (!cir.int<s, 32>)
+      : (!cir.objc.interface<"MyClass">) -> ()
+
+    cir.return
+  }
+
+  // Test 6: Selector reference
+  // CHECK-LABEL: cir.func @test_selector_ref
+  cir.func @test_selector_ref() -> !cir.objc.sel {
+    // CHECK: [[SEL:%.*]] = cir.objc.sel_ref "description" : !cir.objc.sel
+    %sel = cir.objc.sel_ref "description" : !cir.objc.sel
+
+    // CHECK: cir.return [[SEL]]
+    cir.return %sel : !cir.objc.sel
+  }
+
+  // Test 7: Class reference
+  // CHECK-LABEL: cir.func @test_class_ref
+  cir.func @test_class_ref() -> !cir.objc.class {
+    // CHECK: [[CLASS:%.*]] = cir.objc.class_ref "NSString" : !cir.objc.class
+    %cls = cir.objc.class_ref "NSString" : !cir.objc.class
+
+    // CHECK: cir.return [[CLASS]]
+    cir.return %cls : !cir.objc.class
+  }
+
+  // Test 8: Void return message
+  // CHECK-LABEL: cir.func @test_void_message
+  cir.func @test_void_message(%obj: !cir.objc.id) {
+    // CHECK: cir.objc.message %arg0, "release"
+    // CHECK-NOT: =
+    cir.objc.message %obj, "release" {receiverType = !cir.objc.id} : (!cir.objc.id) -> ()
+
+    cir.return
+  }
+
+  // Test 9: Message chain showing type precision
+  // CHECK-LABEL: cir.func @test_message_chain
+  cir.func @test_message_chain() -> !cir.int<s, 32> {
+    // Get NSString class
+    // CHECK: [[CLS:%.*]] = cir.objc.class_ref "NSString"
+    %cls = cir.objc.class_ref "NSString" : !cir.objc.class
+
+    // Allocate instance
+    // CHECK: [[OBJ:%.*]] = cir.objc.message [[CLS]], "alloc"
+    // CHECK-SAME: : (!cir.objc.class) -> !cir.objc.id
+    %obj = cir.objc.message %cls, "alloc"
+      {receiverType = !cir.objc.class, isClassMessage}
+      : (!cir.objc.class) -> !cir.objc.id
+
+    // Cast to NSString* (compiler knows this)
+    // CHECK: [[STR:%.*]] = cir.cast(bitcast, [[OBJ]] : !cir.objc.id), !cir.objc.interface<"NSString">
+    %str = cir.cast(bitcast, %obj : !cir.objc.id), !cir.objc.interface<"NSString">
+
+    // Call method on specific type
+    // CHECK: [[LEN:%.*]] = cir.objc.message [[STR]], "length"
+    // CHECK-SAME: : (!cir.objc.interface<"NSString">) -> !cir.int<s, 32>
+    %len = cir.objc.message %str, "length"
+      {receiverType = !cir.objc.interface<"NSString">}
+      : (!cir.objc.interface<"NSString">) -> !cir.int<s, 32>
+
+    cir.return %len : !cir.int<s, 32>
+  }
+}

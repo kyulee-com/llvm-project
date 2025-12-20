@@ -2745,6 +2745,29 @@ LogicalResult cir::AtomicCmpXchg::verify() {
 }
 
 //===----------------------------------------------------------------------===//
+// ObjCMessageOp
+//===----------------------------------------------------------------------===//
+
+void cir::ObjCMessageOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  // Objective-C message sends can read and write arbitrary memory
+  // (receiver object, instance variables, global state, etc.)
+  effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+}
+
+//===----------------------------------------------------------------------===//
+// ObjCMessageSuperOp
+//===----------------------------------------------------------------------===//
+
+void cir::ObjCMessageSuperOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  // Super message sends can also read and write arbitrary memory
+  effects.emplace_back(MemoryEffects::Read::get());
+  effects.emplace_back(MemoryEffects::Write::get());
+}
+
+//===----------------------------------------------------------------------===//
 // TableGen'd op method definitions
 //===----------------------------------------------------------------------===//
 
