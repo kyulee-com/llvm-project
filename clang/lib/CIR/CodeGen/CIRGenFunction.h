@@ -1486,6 +1486,64 @@ public:
   void emitNullabilityCheck(LValue lhs, mlir::Value rhs,
                             clang::SourceLocation loc);
 
+  //===--------------------------------------------------------------------===//
+  //                           Objective-C Methods
+  //===--------------------------------------------------------------------===//
+
+  /// Load the 'self' parameter in an Objective-C method.
+  mlir::Value loadObjCSelf();
+
+  /// Generate a reference to an Objective-C class by name.
+  /// Example: [NSString alloc] → needs class reference for "NSString"
+  mlir::Value emitObjCClassRef(const ObjCInterfaceDecl *ID);
+
+  /// Emit code for a message send to 'super'.
+  /// Example: [super dealloc] in a method
+  RValue emitObjCMessageSendSuper(const ObjCMessageExpr *E,
+                                  mlir::Value self,
+                                  const ObjCInterfaceDecl *currentClass,
+                                  const ObjCInterfaceDecl *superClass);
+
+  /// Main entry point: Emit code for an Objective-C message expression.
+  /// Handles all 4 kinds of message sends: instance, class, super instance, super class
+  RValue emitObjCMessageExpr(const ObjCMessageExpr *E);
+
+  /// Emit code for property getter (future work).
+  RValue emitObjCPropertyGet(const Expr *E);
+
+  /// Emit code for property setter (future work).
+  void emitObjCPropertySet(const Expr *base, RValue value);
+
+  /// Emit code for instance variable access (future work).
+  LValue emitObjCIvarRefLValue(const ObjCIvarRefExpr *E);
+
+  /// Emit code for @"string" literals (future work).
+  mlir::Value emitObjCStringLiteral(const ObjCStringLiteral *E);
+
+  /// Emit code for @[] array literals (future work).
+  mlir::Value emitObjCArrayLiteral(const ObjCArrayLiteral *E);
+
+  /// Emit code for @{} dictionary literals (future work).
+  mlir::Value emitObjCDictionaryLiteral(const ObjCDictionaryLiteral *E);
+
+  /// Emit code for @(expr) boxing expressions (future work).
+  mlir::Value emitObjCBoxedExpr(const ObjCBoxedExpr *E);
+
+  /// Emit retain operation for ARC (future work).
+  mlir::Value emitObjCRetainExpr(const Expr *E);
+
+  /// Emit code for @try statement (future work).
+  void emitObjCAtTryStmt(const ObjCAtTryStmt &S);
+
+  /// Emit code for @throw statement (future work).
+  void emitObjCAtThrowStmt(const ObjCAtThrowStmt &S);
+
+  /// Emit code for for-in loops / fast enumeration (future work).
+  void emitObjCForCollectionStmt(const ObjCForCollectionStmt &S);
+
+  /// Emit code for @synchronized blocks (future work).
+  void emitObjCAtSynchronizedStmt(const ObjCAtSynchronizedStmt &S);
+
   /// An object to manage conditionally-evaluated expressions.
   class ConditionalEvaluation {
     CIRGenFunction &cgf;

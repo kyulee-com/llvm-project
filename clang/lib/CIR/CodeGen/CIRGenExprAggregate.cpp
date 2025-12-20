@@ -196,6 +196,8 @@ public:
                      "AggExprEmitter: VisitCXXRewrittenBinaryOperator");
   }
   void VisitObjCMessageExpr(ObjCMessageExpr *e) {
+    // For now, aggregate return values from ObjC messages are not supported
+    // This would require implementing proper aggregate return handling
     cgf.cgm.errorNYI(e->getSourceRange(),
                      "AggExprEmitter: VisitObjCMessageExpr");
   }

@@ -196,6 +196,12 @@ public:
   mlir::Value VisitCastExpr(CastExpr *e);
   mlir::Value VisitCallExpr(const CallExpr *e);
 
+  // Objective-C message expressions
+  mlir::Value VisitObjCMessageExpr(ObjCMessageExpr *e) {
+    RValue result = cgf.emitObjCMessageExpr(e);
+    return result.getValue();
+  }
+
   mlir::Value VisitStmtExpr(StmtExpr *e) {
     CIRGenFunction::StmtExprEvaluation eval(cgf);
     if (e->getType()->isVoidType()) {

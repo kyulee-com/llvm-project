@@ -115,9 +115,8 @@ public:
     return {};
   }
   mlir::Value VisitObjCMessageExpr(ObjCMessageExpr *e) {
-    cgf.cgm.errorNYI(e->getExprLoc(),
-                     "ComplexExprEmitter VisitObjCMessageExpr");
-    return {};
+    RValue result = cgf.emitObjCMessageExpr(e);
+    return result.getComplexValue();
   }
   mlir::Value VisitArraySubscriptExpr(Expr *e) { return emitLoadOfLValue(e); }
   mlir::Value VisitMemberExpr(MemberExpr *me) {
