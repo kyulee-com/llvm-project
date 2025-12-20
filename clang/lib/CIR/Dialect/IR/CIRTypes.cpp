@@ -791,6 +791,90 @@ PointerType::verify(llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
 }
 
 //===----------------------------------------------------------------------===//
+// ObjC Id Type
+//===----------------------------------------------------------------------===//
+
+// Objective-C 'id' type is a pointer to any object
+llvm::TypeSize
+ObjCIdType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
+                               mlir::DataLayoutEntryListRef params) const {
+  // ObjC id is a pointer (use void pointer size)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeSizeInBits(PointerType::get(getContext(), voidTy));
+}
+
+uint64_t
+ObjCIdType::getABIAlignment(const mlir::DataLayout &dataLayout,
+                             mlir::DataLayoutEntryListRef params) const {
+  // ObjC id is a pointer (use void pointer alignment)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeABIAlignment(PointerType::get(getContext(), voidTy));
+}
+
+//===----------------------------------------------------------------------===//
+// ObjC Class Type
+//===----------------------------------------------------------------------===//
+
+// Objective-C 'Class' type is a pointer to a class object
+llvm::TypeSize
+ObjCClassType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
+                                  mlir::DataLayoutEntryListRef params) const {
+  // ObjC Class is a pointer (use void pointer size)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeSizeInBits(PointerType::get(getContext(), voidTy));
+}
+
+uint64_t
+ObjCClassType::getABIAlignment(const mlir::DataLayout &dataLayout,
+                                mlir::DataLayoutEntryListRef params) const {
+  // ObjC Class is a pointer (use void pointer alignment)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeABIAlignment(PointerType::get(getContext(), voidTy));
+}
+
+//===----------------------------------------------------------------------===//
+// ObjC SEL Type
+//===----------------------------------------------------------------------===//
+
+// Objective-C 'SEL' type is a pointer to a selector
+llvm::TypeSize
+ObjCSELType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
+                                mlir::DataLayoutEntryListRef params) const {
+  // ObjC SEL is a pointer (use void pointer size)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeSizeInBits(PointerType::get(getContext(), voidTy));
+}
+
+uint64_t
+ObjCSELType::getABIAlignment(const mlir::DataLayout &dataLayout,
+                              mlir::DataLayoutEntryListRef params) const {
+  // ObjC SEL is a pointer (use void pointer alignment)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeABIAlignment(PointerType::get(getContext(), voidTy));
+}
+
+//===----------------------------------------------------------------------===//
+// ObjC Interface Type
+//===----------------------------------------------------------------------===//
+
+// Objective-C interface types are pointers to objects
+llvm::TypeSize
+ObjCInterfaceType::getTypeSizeInBits(const mlir::DataLayout &dataLayout,
+                                      mlir::DataLayoutEntryListRef params) const {
+  // ObjC interface types are pointers (use void pointer size)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeSizeInBits(PointerType::get(getContext(), voidTy));
+}
+
+uint64_t
+ObjCInterfaceType::getABIAlignment(const mlir::DataLayout &dataLayout,
+                                    mlir::DataLayoutEntryListRef params) const {
+  // ObjC interface types are pointers (use void pointer alignment)
+  auto voidTy = VoidType::get(getContext());
+  return dataLayout.getTypeABIAlignment(PointerType::get(getContext(), voidTy));
+}
+
+//===----------------------------------------------------------------------===//
 // CIR Dialect
 //===----------------------------------------------------------------------===//
 

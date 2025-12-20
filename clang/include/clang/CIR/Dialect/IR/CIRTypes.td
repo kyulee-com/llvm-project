@@ -660,13 +660,134 @@ def CIRRecordType : Type<
   CPred<"::mlir::isa<::cir::RecordType>($_self)">, "CIR record type">;
 
 //===----------------------------------------------------------------------===//
+// Objective-C Types
+//===----------------------------------------------------------------------===//
+
+def CIR_ObjCIdType : CIR_Type<"ObjCId", "objc.id", [
+    DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
+    DeclareTypeInterfaceMethods<CIR_SizedTypeInterface>
+]> {
+  let summary = "Objective-C 'id' type (any object)";
+  let description = [{
+    Represents the Objective-C `id` type, which is a pointer to any
+    Objective-C object. Unlike LLVM IR where this becomes an opaque `i8*`,
+    preserving this as a distinct type enables:
+
+    - Distinguishing ObjC pointers from C pointers
+    - Type-based alias analysis optimizations
+    - Potential devirtualization when combined with selector information
+
+    Lowers to `ptr` (opaque pointer) in LLVM IR.
+
+    Example:
+    ```mlir
+    %obj = ... : !cir.objc.id
+    ```
+  }];
+}
+
+def CIR_ObjCClassType : CIR_Type<"ObjCClass", "objc.class", [
+    DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
+    DeclareTypeInterfaceMethods<CIR_SizedTypeInterface>
+]> {
+  let summary = "Objective-C 'Class' type";
+  let description = [{
+    Represents the Objective-C `Class` type, which is a pointer to a class
+    object. This is used for class messages (e.g., `[NSString alloc]`).
+
+    Preserving this as distinct from `id` enables optimization of class
+    message sends, which can sometimes be resolved statically.
+
+    Lowers to `ptr` (opaque pointer) in LLVM IR.
+
+    Example:
+    ```mlir
+    %cls = cir.objc.class_ref "NSString" : !cir.objc.class
+    ```
+  }];
+}
+
+def CIR_ObjCSELType : CIR_Type<"ObjCSEL", "objc.sel", [
+    DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
+    DeclareTypeInterfaceMethods<CIR_SizedTypeInterface>
+]> {
+  let summary = "Objective-C selector type (SEL)";
+  let description = [{
+    Represents the Objective-C `SEL` type, which is a selector (method name).
+
+    Keeping selectors as a distinct type (rather than generic pointers) enables:
+    - Selector-specific optimizations
+    - Constant folding when selector is known
+    - Better tracking of selector references for optimization
+
+    Lowers to `ptr` (opaque pointer) in LLVM IR.
+
+    Example:
+    ```mlir
+    %sel = cir.objc.sel_ref "description" : !cir.objc.sel
+    ```
+  }];
+}
+
+def CIR_ObjCInterfaceType : CIR_Type<"ObjCInterface", "objc.interface", [
+    DeclareTypeInterfaceMethods<DataLayoutTypeInterface>,
+    DeclareTypeInterfaceMethods<CIR_SizedTypeInterface>
+]> {
+  let summary = "Typed Objective-C interface pointer";
+  let description = [{
+    Represents a pointer to a specific Objective-C interface (e.g., `NSString*`,
+    `MyClass*`). The interface name is preserved as a parameter.
+
+    **KEY OPTIMIZATION OPPORTUNITY**: Unlike `id` which is dynamically typed,
+    this preserves static type information that enables:
+
+    1. **Devirtualization**: If we know receiver is `NSString*` and the
+       method `length` is final or class is sealed, we can replace
+       `objc_msgSend` with a direct function call.
+
+    2. **Escape Analysis**: Track specific object types through the program
+       to determine if objects escape or can be stack-allocated.
+
+    3. **Type-Based Alias Analysis**: Two pointers of different interface
+       types may alias less than two `id` pointers.
+
+    4. **Nil-Checking Optimization**: If we know an allocation returns
+       non-nil `NSString*`, we can eliminate redundant nil checks.
+
+    The interface name is stored for type checking, debugging, and as input
+    to optimization passes.
+
+    Lowers to `ptr` (opaque pointer) in LLVM IR, losing type information.
+
+    Example:
+    ```mlir
+    %str = ... : !cir.objc.interface<"NSString">
+    %arr = ... : !cir.objc.interface<"NSArray">
+    ```
+  }];
+
+  let parameters = (ins StringRefParameter<>:$name);
+
+  let assemblyFormat = [{
+    `<` $name `>`
+  }];
+
+  let extraClassDeclaration = [{
+    /// Get the name of the Objective-C interface.
+    llvm::StringRef getInterfaceName() const { return getName(); }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Global type constraints
 //===----------------------------------------------------------------------===//
 
 def CIR_AnyType : AnyTypeOf<[
   CIR_VoidType, CIR_BoolType, CIR_ArrayType, CIR_VectorType, CIR_IntType,
   CIR_AnyFloatType, CIR_PointerType, CIR_FuncType, CIR_RecordType,
-  CIR_ComplexType, CIR_VPtrType
+  CIR_ComplexType, CIR_VPtrType,
+  // Objective-C types
+  CIR_ObjCIdType, CIR_ObjCClassType, CIR_ObjCSELType, CIR_ObjCInterfaceType
 ]>;
 
 #endif // CLANG_CIR_DIALECT_IR_CIRTYPES_TD

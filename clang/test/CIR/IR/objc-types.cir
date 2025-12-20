@@ -1,0 +1,88 @@
+// RUN: cir-opt %s | cir-opt | FileCheck %s
+
+// Test that Objective-C types in CIR parse and print correctly
+
+module {
+  // Test 1: Generic 'id' type
+  // CHECK-LABEL: cir.func @test_id_type
+  // CHECK-SAME: ([[ARG:%.*]]: !cir.objc.id)
+  cir.func @test_id_type(%obj: !cir.objc.id) -> !cir.objc.id {
+    // CHECK: cir.return [[ARG]] : !cir.objc.id
+    cir.return %obj : !cir.objc.id
+  }
+
+  // Test 2: 'Class' type
+  // CHECK-LABEL: cir.func @test_class_type
+  // CHECK-SAME: ([[ARG:%.*]]: !cir.objc.class)
+  cir.func @test_class_type(%cls: !cir.objc.class) -> !cir.objc.class {
+    // CHECK: cir.return [[ARG]] : !cir.objc.class
+    cir.return %cls : !cir.objc.class
+  }
+
+  // Test 3: 'SEL' type
+  // CHECK-LABEL: cir.func @test_sel_type
+  // CHECK-SAME: ([[ARG:%.*]]: !cir.objc.sel)
+  cir.func @test_sel_type(%selector: !cir.objc.sel) -> !cir.objc.sel {
+    // CHECK: cir.return [[ARG]] : !cir.objc.sel
+    cir.return %selector : !cir.objc.sel
+  }
+
+  // Test 4: Specific interface type (NSString)
+  // CHECK-LABEL: cir.func @test_nsstring_type
+  // CHECK-SAME: ([[ARG:%.*]]: !cir.objc.interface<"NSString">)
+  cir.func @test_nsstring_type(%str: !cir.objc.interface<"NSString">) -> !cir.objc.interface<"NSString"> {
+    // CHECK: cir.return [[ARG]] : !cir.objc.interface<"NSString">
+    cir.return %str : !cir.objc.interface<"NSString">
+  }
+
+  // Test 5: Different interface types
+  // CHECK-LABEL: cir.func @test_multiple_interfaces
+  // CHECK-SAME: ([[STR:%.*]]: !cir.objc.interface<"NSString">, [[ARR:%.*]]: !cir.objc.interface<"NSArray">)
+  cir.func @test_multiple_interfaces(
+      %str: !cir.objc.interface<"NSString">,
+      %arr: !cir.objc.interface<"NSArray">) -> !cir.objc.interface<"NSString"> {
+    // CHECK: cir.return [[STR]] : !cir.objc.interface<"NSString">
+    cir.return %str : !cir.objc.interface<"NSString">
+  }
+
+  // Test 6: Pointers to ObjC types
+  // CHECK-LABEL: cir.func @test_objc_pointers
+  // CHECK-SAME: ([[PTR:%.*]]: !cir.ptr<!cir.objc.interface<"NSString">>)
+  cir.func @test_objc_pointers(%ptr: !cir.ptr<!cir.objc.interface<"NSString">>) -> !cir.objc.interface<"NSString"> {
+    // CHECK: [[LOADED:%.*]] = cir.load [[PTR]]
+    // CHECK-SAME: !cir.ptr<!cir.objc.interface<"NSString">>, !cir.objc.interface<"NSString">
+    %obj = cir.load %ptr : !cir.ptr<!cir.objc.interface<"NSString">>, !cir.objc.interface<"NSString">
+
+    // CHECK: cir.return [[LOADED]] : !cir.objc.interface<"NSString">
+    cir.return %obj : !cir.objc.interface<"NSString">
+  }
+
+  // Test 7: Type precision in message sends
+  // This shows how type information flows through operations
+  // CHECK-LABEL: cir.func @test_type_precision
+  cir.func @test_type_precision() -> !cir.int<s, 32> {
+    // Get a class - returns !cir.objc.class
+    // CHECK: [[CLASS:%.*]] = cir.objc.class_ref "NSString" : !cir.objc.class
+    %class = cir.objc.class_ref "NSString" : !cir.objc.class
+
+    // Call +alloc on class - returns !cir.objc.id (could be any object)
+    // CHECK: [[OBJ:%.*]] = cir.objc.message [[CLASS]], "alloc"
+    // CHECK-SAME: : (!cir.objc.class) -> !cir.objc.id
+    %obj = cir.objc.message %class, "alloc" {receiverType = !cir.objc.class, isClassMessage}
+      : (!cir.objc.class) -> !cir.objc.id
+
+    // Cast id to specific type - in real code, compiler knows this
+    // For this test, let's assume we have NSString* now
+    // CHECK: [[STR:%.*]] = cir.cast(bitcast, [[OBJ]] : !cir.objc.id), !cir.objc.interface<"NSString">
+    %str = cir.cast(bitcast, %obj : !cir.objc.id), !cir.objc.interface<"NSString">
+
+    // Call -length on NSString* - preserves specific type!
+    // CHECK: [[LEN:%.*]] = cir.objc.message [[STR]], "length"
+    // CHECK-SAME: : (!cir.objc.interface<"NSString">) -> !cir.int<s, 32>
+    %len = cir.objc.message %str, "length" {receiverType = !cir.objc.interface<"NSString">}
+      : (!cir.objc.interface<"NSString">) -> !cir.int<s, 32>
+
+    // CHECK: cir.return [[LEN]] : !cir.int<s, 32>
+    cir.return %len : !cir.int<s, 32>
+  }
+}
