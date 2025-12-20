@@ -1,0 +1,176 @@
+// RUN: cir-opt %s -cir-to-llvm -o %t.ll
+// RUN: FileCheck --input-file=%t.ll %s -check-prefix=LLVM
+
+// Test that CIR Objective-C operations lower correctly to LLVM IR with
+// proper runtime function calls
+//
+// ✨ OPTIMIZATION RESEARCH NOTE:
+// This test verifies that our lowering generates the SAME runtime calls
+// as traditional Clang, but we preserve high-level semantics in CIR first!
+//
+// The key insight: optimization should happen BEFORE this lowering!
+// Once we're here, we've already lost the high-level information.
+
+!s32i = !cir.int<s, 32>
+!objc_id = !cir.objc.id
+!objc_class = !cir.objc.class
+!objc_sel = !cir.objc.sel
+!objc_nsstring = !cir.objc.interface<"NSString">
+
+module {
+  // Test 1: Class reference lowering
+  // LLVM-LABEL: define ptr @test_class_ref()
+  cir.func @test_class_ref() -> !objc_class {
+    // CIR operation preserves class name
+    %class = cir.objc.class_ref "NSString" : !objc_class
+
+    // LLVM: [[STR:%.*]] = getelementptr {{.*}} @.str.NSString
+    // LLVM: [[CLASS:%.*]] = call ptr @objc_getClass(ptr [[STR]])
+    // LLVM: ret ptr [[CLASS]]
+
+    cir.return %class : !objc_class
+  }
+
+  // Test 2: Selector reference lowering
+  // LLVM-LABEL: define ptr @test_selector()
+  cir.func @test_selector() -> !objc_sel {
+    // CIR operation preserves selector name as string
+    %sel = cir.objc.sel_ref "length" : !objc_sel
+
+    // LLVM: [[STR:%.*]] = getelementptr {{.*}} @.str.length
+    // LLVM: [[SEL:%.*]] = call ptr @sel_registerName(ptr [[STR]])
+    // LLVM: ret ptr [[SEL]]
+
+    cir.return %sel : !objc_sel
+  }
+
+  // Test 3: Instance message lowering (no args)
+  // LLVM-LABEL: define i32 @test_instance_message(ptr %0)
+  cir.func @test_instance_message(%receiver: !objc_nsstring) -> !s32i {
+    // CIR preserves: receiver type, selector string, return type
+    %result = cir.objc.message %receiver, "length" : (!objc_nsstring) -> !s32i
+
+    // LLVM: [[SEL_STR:%.*]] = getelementptr {{.*}} @.str.length
+    // LLVM: [[SEL:%.*]] = call ptr @sel_registerName(ptr [[SEL_STR]])
+    // LLVM: [[RESULT:%.*]] = call i32 @objc_msgSend(ptr %0, ptr [[SEL]])
+    // LLVM: ret i32 [[RESULT]]
+
+    cir.return %result : !s32i
+  }
+
+  // Test 4: Instance message with arguments
+  // LLVM-LABEL: define void @test_message_with_args(ptr %0)
+  cir.func @test_message_with_args(%receiver: !objc_nsstring) {
+    %value = cir.const #cir.int<42> : !s32i
+
+    // CIR preserves argument types and count
+    cir.objc.message %receiver, "setValue:"(%value) : (!objc_nsstring, !s32i) -> ()
+
+    // LLVM: [[SEL_STR:%.*]] = getelementptr {{.*}} @.str.setValue:
+    // LLVM: [[SEL:%.*]] = call ptr @sel_registerName(ptr [[SEL_STR]])
+    // LLVM: call void @objc_msgSend(ptr %0, ptr [[SEL]], i32 42)
+
+    cir.return
+  }
+
+  // Test 5: Class message (calling +alloc)
+  // LLVM-LABEL: define ptr @test_class_message()
+  cir.func @test_class_message() -> !objc_id {
+    // First get the class
+    %class = cir.objc.class_ref "NSString" : !objc_class
+
+    // Then send message to the class
+    %result = cir.objc.message %class, "alloc" : (!objc_class) -> !objc_id
+
+    // LLVM: [[CLASS_STR:%.*]] = getelementptr {{.*}} @.str.NSString
+    // LLVM: [[CLASS:%.*]] = call ptr @objc_getClass(ptr [[CLASS_STR]])
+    // LLVM: [[SEL_STR:%.*]] = getelementptr {{.*}} @.str.alloc
+    // LLVM: [[SEL:%.*]] = call ptr @sel_registerName(ptr [[SEL_STR]])
+    // LLVM: [[RESULT:%.*]] = call ptr @objc_msgSend(ptr [[CLASS]], ptr [[SEL]])
+    // LLVM: ret ptr [[RESULT]]
+
+    cir.return %result : !objc_id
+  }
+
+  // Test 6: Multiple arguments
+  // LLVM-LABEL: define i32 @test_multiple_args(ptr %0)
+  cir.func @test_multiple_args(%receiver: !objc_id) -> !s32i {
+    %x = cir.const #cir.int<10> : !s32i
+    %y = cir.const #cir.int<20> : !s32i
+
+    %result = cir.objc.message %receiver, "compute:with:"(%x, %y) : (!objc_id, !s32i, !s32i) -> !s32i
+
+    // LLVM: [[SEL_STR:%.*]] = getelementptr {{.*}} @.str.compute:with:
+    // LLVM: [[SEL:%.*]] = call ptr @sel_registerName(ptr [[SEL_STR]])
+    // LLVM: [[RESULT:%.*]] = call i32 @objc_msgSend(ptr %0, ptr [[SEL]], i32 10, i32 20)
+    // LLVM: ret i32 [[RESULT]]
+
+    cir.return %result : !s32i
+  }
+
+  // Test 7: Super message lowering
+  // LLVM-LABEL: define i32 @test_super_message(ptr %0)
+  cir.func @test_super_message(%self: !objc_nsstring) -> !s32i {
+    // CIR preserves current class, super class, and method info
+    %result = cir.objc.message_super %self, "length", "MyClass", "NSString"() : (!objc_nsstring) -> !s32i
+
+    // LLVM: [[SEL_STR:%.*]] = getelementptr {{.*}} @.str.length
+    // LLVM: [[SEL:%.*]] = call ptr @sel_registerName(ptr [[SEL_STR]])
+    // LLVM: [[SUPER_CLASS_STR:%.*]] = getelementptr {{.*}} @.str.NSString
+    // LLVM: [[SUPER_CLASS:%.*]] = call ptr @objc_getClass(ptr [[SUPER_CLASS_STR]])
+    //
+    // LLVM: [[SUPER_STRUCT:%.*]] = alloca { ptr, ptr }
+    // LLVM: [[RECEIVER_PTR:%.*]] = getelementptr {{.*}} [[SUPER_STRUCT]], i32 0, i32 0
+    // LLVM: store ptr %0, ptr [[RECEIVER_PTR]]
+    // LLVM: [[CLASS_PTR:%.*]] = getelementptr {{.*}} [[SUPER_STRUCT]], i32 0, i32 1
+    // LLVM: store ptr [[SUPER_CLASS]], ptr [[CLASS_PTR]]
+    //
+    // LLVM: [[RESULT:%.*]] = call i32 @objc_msgSendSuper2(ptr [[SUPER_STRUCT]], ptr [[SEL]])
+    // LLVM: ret i32 [[RESULT]]
+
+    cir.return %result : !s32i
+  }
+
+  // Verify runtime function declarations are created
+  // LLVM: declare ptr @objc_getClass(ptr)
+  // LLVM: declare ptr @sel_registerName(ptr)
+  // LLVM: declare i32 @objc_msgSend(ptr, ptr, ...)
+  // LLVM: declare i32 @objc_msgSendSuper2(ptr, ptr, ...)
+
+  // Verify string constants are created
+  // LLVM: @.str.NSString = {{.*}} constant [9 x i8] c"NSString\00"
+  // LLVM: @.str.length = {{.*}} constant [7 x i8] c"length\00"
+  // LLVM: @.str.setValue: = {{.*}} constant [10 x i8] c"setValue:\00"
+  // LLVM: @.str.alloc = {{.*}} constant [6 x i8] c"alloc\00"
+  // LLVM: @.str.compute:with: = {{.*}} constant [14 x i8] c"compute:with:\00"
+}
+
+// ===----------------------------------------------------------------------===//
+// Summary of lowering transformations:
+// ===----------------------------------------------------------------------===//
+//
+// Before (CIR - high-level):
+//   %result = cir.objc.message %receiver, "length" : (!cir.objc.interface<"NSString">) -> !s32i
+//   ↑ We know: NSString type, "length" selector, returns i32
+//
+// After (LLVM IR - low-level):
+//   %sel = call ptr @sel_registerName(ptr @.str.length)
+//   %result = call i32 @objc_msgSend(ptr %receiver, ptr %sel)
+//   ↑ All type info lost - just opaque pointers!
+//
+// Key transformations:
+// 1. cir.objc.class_ref → objc_getClass() call
+// 2. cir.objc.sel_ref → sel_registerName() call
+// 3. cir.objc.message → objc_msgSend() call
+// 4. cir.objc.message_super → objc_msgSendSuper2() call with struct
+//
+// 🎯 OPTIMIZATION OPPORTUNITY LOST HERE:
+// Once we've lowered to LLVM IR, we can't:
+// - Tell if receiver is NSString* vs generic id
+// - Pattern match on selector strings
+// - Identify alloc/init patterns
+// - Devirtualize based on type information
+//
+// This is why we need CIR-level optimization passes BEFORE this lowering!
+//
+// ===----------------------------------------------------------------------===//

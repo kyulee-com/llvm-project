@@ -107,6 +107,7 @@ lowerCIRVisibilityToLLVMVisibility(cir::VisibilityKind visibilityKind) {
   case cir::VisibilityKind::Protected:
     return ::mlir::LLVM::Visibility::Protected;
   }
+  llvm_unreachable("Unknown visibility kind");
 }
 
 /// Emits the value from memory as expected by its users. Should be called when
@@ -2506,6 +2507,10 @@ void ConvertCIRToLLVMPass::runOnOperation() {
                CIRToLLVMGetBitfieldOpLowering,
                CIRToLLVMGetGlobalOpLowering,
                CIRToLLVMGetMemberOpLowering,
+               CIRToLLVMObjCClassRefOpLowering,
+               CIRToLLVMObjCMessageOpLowering,
+               CIRToLLVMObjCMessageSuperOpLowering,
+               CIRToLLVMObjCSelRefOpLowering,
                CIRToLLVMReturnAddrOpLowering,
                CIRToLLVMRotateOpLowering,
                CIRToLLVMSelectOpLowering,
@@ -2586,6 +2591,7 @@ mlir::LogicalResult CIRToLLVMGetMemberOpLowering::matchAndRewrite(
                                                        adaptor.getAddr());
     return mlir::success();
   }
+  llvm_unreachable("Unknown record type");
 }
 
 mlir::LogicalResult CIRToLLVMUnreachableOpLowering::matchAndRewrite(
@@ -3346,6 +3352,330 @@ mlir::LogicalResult CIRToLLVMVAArgOpLowering::matchAndRewrite(
     return mlir::failure();
 
   rewriter.replaceOpWithNewOp<mlir::LLVM::VaArgOp>(op, llvmType, vaList);
+  return mlir::success();
+}
+
+//===----------------------------------------------------------------------===//
+// Objective-C Operations Lowering
+//===----------------------------------------------------------------------===//
+//
+// ✨ OPTIMIZATION RESEARCH NOTE:
+// ===============================
+// This is where we lower high-level ObjC operations to LLVM IR runtime calls.
+//
+// Traditional Clang goes directly from AST → objc_msgSend calls.
+// ClangIR adds an intermediate level that PRESERVES semantic information!
+//
+// Future optimization passes could operate on the CIR level (before this lowering)
+// to perform devirtualization, selector hoisting, etc.
+//
+//===----------------------------------------------------------------------===//
+
+/// Helper: Get or declare an Objective-C runtime function
+static mlir::LLVM::LLVMFuncOp
+getOrDeclareObjCRuntimeFunction(mlir::OpBuilder &builder,
+                                mlir::ModuleOp module,
+                                llvm::StringRef name,
+                                mlir::Type resultType,
+                                llvm::ArrayRef<mlir::Type> argTypes,
+                                bool isVarArg = false) {
+  auto *context = builder.getContext();
+
+  // Check if function already declared
+  if (auto existingFunc = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(name)) {
+    return existingFunc;
+  }
+
+  // Create function type
+  auto funcType = mlir::LLVM::LLVMFunctionType::get(resultType, argTypes, isVarArg);
+
+  // Insert function declaration at module level
+  mlir::OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(module.getBody());
+
+  auto funcOp = builder.create<mlir::LLVM::LLVMFuncOp>(
+      module.getLoc(), name, funcType);
+
+  // Mark as external linkage
+  funcOp.setLinkage(mlir::LLVM::Linkage::External);
+
+  return funcOp;
+}
+
+/// Helper: Create a global string constant and return a pointer to it
+static mlir::Value createGlobalString(mlir::Location loc,
+                                      mlir::OpBuilder &builder,
+                                      llvm::StringRef str,
+                                      llvm::StringRef name) {
+  auto *context = builder.getContext();
+  auto module = builder.getBlock()->getParent()->getParentOfType<mlir::ModuleOp>();
+
+  // Create the string constant type
+  auto stringType = mlir::LLVM::LLVMArrayType::get(
+      mlir::IntegerType::get(context, 8), str.size() + 1); // +1 for null terminator
+
+  // Check if global already exists
+  llvm::SmallString<64> globalName;
+  llvm::raw_svector_ostream os(globalName);
+  os << ".str." << name;
+
+  mlir::LLVM::GlobalOp globalStr;
+  if (auto existing = module.lookupSymbol<mlir::LLVM::GlobalOp>(globalName)) {
+    globalStr = existing;
+  } else {
+    // Create global string constant
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+
+    globalStr = builder.create<mlir::LLVM::GlobalOp>(
+        loc, stringType, /*isConstant=*/true,
+        mlir::LLVM::Linkage::Private, globalName,
+        builder.getStringAttr(str.str() + '\0'));
+  }
+
+  // Get pointer to the global string
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(context);
+  mlir::Value globalPtr = builder.create<mlir::LLVM::AddressOfOp>(
+      loc, ptrType, globalStr.getSymName());
+
+  return globalPtr;
+}
+
+/// Lowering for cir.objc.class_ref - Lower to objc_getClass() call
+mlir::LogicalResult CIRToLLVMObjCClassRefOpLowering::matchAndRewrite(
+    cir::ObjCClassRefOp op, OpAdaptor adaptor,
+    mlir::ConversionPatternRewriter &rewriter) const {
+
+  auto *context = rewriter.getContext();
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(context);
+
+  // Declare objc_getClass: Class objc_getClass(const char *name)
+  auto objcGetClassFunc = getOrDeclareObjCRuntimeFunction(
+      rewriter, module, "objc_getClass", ptrType, {ptrType});
+
+  // Create global string for class name
+  llvm::StringRef className = op.getName();
+  mlir::Value classNameStr = createGlobalString(
+      op.getLoc(), rewriter, className, className);
+
+  // Call objc_getClass
+  auto callOp = rewriter.create<mlir::LLVM::CallOp>(
+      op.getLoc(), objcGetClassFunc, mlir::ValueRange{classNameStr});
+
+  rewriter.replaceOp(op, callOp.getResult());
+  return mlir::success();
+}
+
+/// Lowering for cir.objc.sel_ref - Create selector reference
+/// For MVP, we just call sel_registerName() directly
+/// TODO: Optimize with selector caching/lazy registration
+mlir::LogicalResult CIRToLLVMObjCSelRefOpLowering::matchAndRewrite(
+    cir::ObjCSelRefOp op, OpAdaptor adaptor,
+    mlir::ConversionPatternRewriter &rewriter) const {
+
+  auto *context = rewriter.getContext();
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(context);
+
+  // Declare sel_registerName: SEL sel_registerName(const char *name)
+  auto selRegisterNameFunc = getOrDeclareObjCRuntimeFunction(
+      rewriter, module, "sel_registerName", ptrType, {ptrType});
+
+  // Create global string for selector name
+  llvm::StringRef selectorName = op.getName();
+  mlir::Value selectorNameStr = createGlobalString(
+      op.getLoc(), rewriter, selectorName, selectorName);
+
+  // Call sel_registerName
+  auto callOp = rewriter.create<mlir::LLVM::CallOp>(
+      op.getLoc(), selRegisterNameFunc, mlir::ValueRange{selectorNameStr});
+
+  rewriter.replaceOp(op, callOp.getResult());
+  return mlir::success();
+}
+
+/// Lowering for cir.objc.message - Lower to objc_msgSend() call
+///
+/// 🎯 KEY LOWERING: This is where we lose the high-level semantic information!
+/// Before this lowering:
+///   %result = cir.objc.message %receiver, "length" : (!cir.objc.interface<"NSString">) -> !s64i
+///   ↑ We know: receiver is NSString*, method is "length", returns int64
+///
+/// After this lowering:
+///   %result = call @objc_msgSend(%receiver, %sel, ...)
+///   ↑ All type info lost - just opaque pointers!
+///
+/// This is why optimization should happen BEFORE this lowering!
+mlir::LogicalResult CIRToLLVMObjCMessageOpLowering::matchAndRewrite(
+    cir::ObjCMessageOp op, OpAdaptor adaptor,
+    mlir::ConversionPatternRewriter &rewriter) const {
+
+  auto *context = rewriter.getContext();
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(context);
+
+  // Get selector string
+  llvm::StringRef selectorName = op.getSelector();
+
+  // Create SEL by calling sel_registerName
+  mlir::Value selectorNameStr = createGlobalString(
+      op.getLoc(), rewriter, selectorName, selectorName);
+
+  auto selRegisterNameFunc = getOrDeclareObjCRuntimeFunction(
+      rewriter, module, "sel_registerName", ptrType, {ptrType});
+
+  auto selCallOp = rewriter.create<mlir::LLVM::CallOp>(
+      op.getLoc(), selRegisterNameFunc, mlir::ValueRange{selectorNameStr});
+  mlir::Value sel = selCallOp.getResult();
+
+  // Determine result type
+  mlir::Type resultType;
+  if (op.getResult()) {
+    resultType = getTypeConverter()->convertType(op.getResult().getType());
+  } else {
+    // Void return
+    resultType = mlir::LLVM::LLVMVoidType::get(context);
+  }
+
+  // Build objc_msgSend function type: id objc_msgSend(id receiver, SEL sel, ...)
+  // Note: objc_msgSend is variadic!
+  llvm::SmallVector<mlir::Type> msgSendArgTypes = {ptrType, ptrType};
+  auto msgSendFuncType = mlir::LLVM::LLVMFunctionType::get(
+      resultType, msgSendArgTypes, /*isVarArg=*/true);
+
+  // Declare objc_msgSend
+  // TODO: Handle objc_msgSend variants (stret, fpret, etc.) based on result type
+  auto msgSendFunc = getOrDeclareObjCRuntimeFunction(
+      rewriter, module, "objc_msgSend", resultType, msgSendArgTypes,
+      /*isVarArg=*/true);
+
+  // Build call arguments: receiver, sel, method args...
+  llvm::SmallVector<mlir::Value> callArgs;
+  callArgs.push_back(adaptor.getReceiver());
+  callArgs.push_back(sel);
+
+  // Add method arguments
+  for (mlir::Value arg : adaptor.getArguments()) {
+    callArgs.push_back(arg);
+  }
+
+  // Create the call to objc_msgSend
+  auto callOp = rewriter.create<mlir::LLVM::CallOp>(
+      op.getLoc(), msgSendFunc, callArgs);
+
+  if (op.getResult()) {
+    rewriter.replaceOp(op, callOp.getResult());
+  } else {
+    rewriter.eraseOp(op);
+  }
+
+  return mlir::success();
+}
+
+/// Lowering for cir.objc.message_super - Lower to objc_msgSendSuper2() call
+///
+/// 🎯 OPTIMIZATION OPPORTUNITY:
+/// Super calls are STATICALLY RESOLVABLE! The target method is known at compile time.
+/// A future optimization pass could replace this entire operation with a direct
+/// function call to the superclass's method implementation!
+mlir::LogicalResult CIRToLLVMObjCMessageSuperOpLowering::matchAndRewrite(
+    cir::ObjCMessageSuperOp op, OpAdaptor adaptor,
+    mlir::ConversionPatternRewriter &rewriter) const {
+
+  auto *context = rewriter.getContext();
+  auto module = op->getParentOfType<mlir::ModuleOp>();
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(context);
+  auto i32Type = mlir::IntegerType::get(context, 32);
+
+  // For super calls, we use objc_msgSendSuper2 which takes a struct:
+  // struct objc_super {
+  //   id receiver;
+  //   Class super_class;
+  // };
+  // id objc_msgSendSuper2(struct objc_super *super, SEL sel, ...);
+
+  // Get selector
+  llvm::StringRef selectorName = op.getSelector();
+  mlir::Value selectorNameStr = createGlobalString(
+      op.getLoc(), rewriter, selectorName, selectorName);
+
+  auto selRegisterNameFunc = getOrDeclareObjCRuntimeFunction(
+      rewriter, module, "sel_registerName", ptrType, {ptrType});
+
+  auto selCallOp = rewriter.create<mlir::LLVM::CallOp>(
+      op.getLoc(), selRegisterNameFunc, mlir::ValueRange{selectorNameStr});
+  mlir::Value sel = selCallOp.getResult();
+
+  // Get super class using objc_getClass
+  llvm::StringRef superClassName = op.getSuperClass();
+  mlir::Value superClassNameStr = createGlobalString(
+      op.getLoc(), rewriter, superClassName, superClassName);
+
+  auto objcGetClassFunc = getOrDeclareObjCRuntimeFunction(
+      rewriter, module, "objc_getClass", ptrType, {ptrType});
+
+  auto classCallOp = rewriter.create<mlir::LLVM::CallOp>(
+      op.getLoc(), objcGetClassFunc, mlir::ValueRange{superClassNameStr});
+  mlir::Value superClass = classCallOp.getResult();
+
+  // Allocate struct objc_super on stack
+  // struct = { receiver, super_class }
+  auto structType = mlir::LLVM::LLVMStructType::getLiteral(context, {ptrType, ptrType});
+  auto i64Type = mlir::IntegerType::get(context, 64);
+  auto one = rewriter.create<mlir::LLVM::ConstantOp>(
+      op.getLoc(), i64Type, rewriter.getI64IntegerAttr(1));
+  auto superStruct = rewriter.create<mlir::LLVM::AllocaOp>(
+      op.getLoc(), ptrType, structType, one, /*alignment=*/0);
+
+  // Store receiver at index 0
+  auto zero = rewriter.create<mlir::LLVM::ConstantOp>(
+      op.getLoc(), i32Type, rewriter.getI32IntegerAttr(0));
+  auto receiverPtr = rewriter.create<mlir::LLVM::GEPOp>(
+      op.getLoc(), ptrType, structType, superStruct,
+      mlir::ArrayRef<mlir::LLVM::GEPArg>{0, 0});
+  rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), adaptor.getSelf(), receiverPtr);
+
+  // Store super_class at index 1
+  auto classPtr = rewriter.create<mlir::LLVM::GEPOp>(
+      op.getLoc(), ptrType, structType, superStruct,
+      mlir::ArrayRef<mlir::LLVM::GEPArg>{0, 1});
+  rewriter.create<mlir::LLVM::StoreOp>(op.getLoc(), superClass, classPtr);
+
+  // Determine result type
+  mlir::Type resultType;
+  if (op.getResult()) {
+    resultType = getTypeConverter()->convertType(op.getResult().getType());
+  } else {
+    resultType = mlir::LLVM::LLVMVoidType::get(context);
+  }
+
+  // Declare objc_msgSendSuper2
+  llvm::SmallVector<mlir::Type> msgSendSuperArgTypes = {ptrType, ptrType};
+  auto msgSendSuperFunc = getOrDeclareObjCRuntimeFunction(
+      rewriter, module, "objc_msgSendSuper2", resultType, msgSendSuperArgTypes,
+      /*isVarArg=*/true);
+
+  // Build call arguments: &super_struct, sel, method args...
+  llvm::SmallVector<mlir::Value> callArgs;
+  callArgs.push_back(superStruct);
+  callArgs.push_back(sel);
+
+  // Add method arguments
+  for (mlir::Value arg : adaptor.getArguments()) {
+    callArgs.push_back(arg);
+  }
+
+  // Create the call to objc_msgSendSuper2
+  auto callOp = rewriter.create<mlir::LLVM::CallOp>(
+      op.getLoc(), msgSendSuperFunc, callArgs);
+
+  if (op.getResult()) {
+    rewriter.replaceOp(op, callOp.getResult());
+  } else {
+    rewriter.eraseOp(op);
+  }
+
   return mlir::success();
 }
 

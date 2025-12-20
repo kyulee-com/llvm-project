@@ -821,6 +821,50 @@ public:
                   mlir::ConversionPatternRewriter &) const override;
 };
 
+//===----------------------------------------------------------------------===//
+// Objective-C Operations Lowering
+//===----------------------------------------------------------------------===//
+
+class CIRToLLVMObjCMessageOpLowering
+    : public mlir::OpConversionPattern<cir::ObjCMessageOp> {
+public:
+  using mlir::OpConversionPattern<cir::ObjCMessageOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::ObjCMessageOp op, OpAdaptor,
+                  mlir::ConversionPatternRewriter &) const override;
+};
+
+class CIRToLLVMObjCMessageSuperOpLowering
+    : public mlir::OpConversionPattern<cir::ObjCMessageSuperOp> {
+public:
+  using mlir::OpConversionPattern<cir::ObjCMessageSuperOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::ObjCMessageSuperOp op, OpAdaptor,
+                  mlir::ConversionPatternRewriter &) const override;
+};
+
+class CIRToLLVMObjCSelRefOpLowering
+    : public mlir::OpConversionPattern<cir::ObjCSelRefOp> {
+public:
+  using mlir::OpConversionPattern<cir::ObjCSelRefOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::ObjCSelRefOp op, OpAdaptor,
+                  mlir::ConversionPatternRewriter &) const override;
+};
+
+class CIRToLLVMObjCClassRefOpLowering
+    : public mlir::OpConversionPattern<cir::ObjCClassRefOp> {
+public:
+  using mlir::OpConversionPattern<cir::ObjCClassRefOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::ObjCClassRefOp op, OpAdaptor,
+                  mlir::ConversionPatternRewriter &) const override;
+};
+
 } // namespace direct
 } // namespace cir
 
