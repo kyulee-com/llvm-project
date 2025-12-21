@@ -417,7 +417,12 @@ static llvm::Error serveConnection(
 }
 
 int main(int argc, char *argv[]) {
+#ifdef __FACEBOOK__
+  llvm::InitLLVM IL(argc, argv, /*InstallPipeSignalExitHandler=*/true);
+  llvm::PrettyStackTraceProgram X(argc, argv);
+#else
   llvm::InitLLVM IL(argc, argv, /*InstallPipeSignalExitHandler=*/false);
+#endif
 #if !defined(__APPLE__)
   llvm::setBugReportMsg("PLEASE submit a bug report to " LLDB_BUG_REPORT_URL
                         " and include the crash backtrace.\n");

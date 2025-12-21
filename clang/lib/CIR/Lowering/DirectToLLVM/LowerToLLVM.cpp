@@ -3454,6 +3454,90 @@ static mlir::Value createGlobalString(mlir::Location loc,
   return globalPtr;
 }
 
+/// Get or create a cached Objective-C selector reference
+/// This creates globals matching traditional Clang's approach:
+///   @OBJC_METH_VAR_NAME_<hash> = private constant [N x i8] c"selectorName\00"
+///   @OBJC_SELECTOR_REFERENCES_<hash> = externally_initialized global ptr @OBJC_METH_VAR_NAME_<hash>, section "objc_selrefs"
+/// Returns a load from the selector reference, which is equivalent to calling sel_registerName
+/// but allows LLVM to optimize (CSE, hoist out of loops, etc.)
+static mlir::Value getOrCreateCachedObjCSelector(mlir::Location loc,
+                                                  mlir::OpBuilder &builder,
+                                                  llvm::StringRef selectorName) {
+  auto *context = builder.getContext();
+  auto module = builder.getBlock()->getParent()->getParentOfType<mlir::ModuleOp>();
+  auto ptrType = mlir::LLVM::LLVMPointerType::get(context);
+
+  // Use hash of selector name for unique global names (enables automatic deduplication)
+  auto hash = llvm::hash_value(selectorName);
+  llvm::SmallString<64> selectorRefName;
+  llvm::SmallString<64> methodVarName;
+  llvm::raw_svector_ostream refOS(selectorRefName);
+  llvm::raw_svector_ostream varOS(methodVarName);
+
+  refOS << "OBJC_SELECTOR_REFERENCES_." << llvm::format_hex_no_prefix(hash, 8);
+  varOS << "OBJC_METH_VAR_NAME_." << llvm::format_hex_no_prefix(hash, 8);
+
+  // Check if selector reference already exists for this selector
+  mlir::LLVM::GlobalOp selectorRefGlobal;
+  if (auto existing = module.lookupSymbol<mlir::LLVM::GlobalOp>(selectorRefName)) {
+    selectorRefGlobal = existing;
+  } else {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+
+    // Step 1: Create the method name string constant
+    // e.g., @OBJC_METH_VAR_NAME_<hash> = private constant [9 x i8] c"getValue\00"
+    auto stringType = mlir::LLVM::LLVMArrayType::get(
+        mlir::IntegerType::get(context, 8), selectorName.size() + 1);
+
+    auto methodVarGlobal = builder.create<mlir::LLVM::GlobalOp>(
+        loc, stringType, /*isConstant=*/true,
+        mlir::LLVM::Linkage::Private, methodVarName,
+        builder.getStringAttr(selectorName.str() + '\0'),
+        /*alignment=*/1, /*addrSpace=*/0, /*dsoLocal=*/false,
+        /*threadLocal=*/false, /*comdat=*/mlir::SymbolRefAttr(),
+        /*attrs=*/llvm::ArrayRef<mlir::NamedAttribute>{});
+    methodVarGlobal.setUnnamedAddrAttr(mlir::LLVM::UnnamedAddrAttr::get(context, mlir::LLVM::UnnamedAddr::Global));
+
+    // Step 2: Create the selector reference global
+    // e.g., @OBJC_SELECTOR_REFERENCES_<hash> = externally_initialized global ptr @OBJC_METH_VAR_NAME_<hash>, section "objc_selrefs"
+    selectorRefGlobal = builder.create<mlir::LLVM::GlobalOp>(
+        loc, ptrType, /*isConstant=*/false,
+        mlir::LLVM::Linkage::Private, selectorRefName,
+        mlir::Attribute(), /*alignment=*/8, /*addrSpace=*/0, /*dsoLocal=*/false,
+        /*threadLocal=*/false, /*comdat=*/mlir::SymbolRefAttr(),
+        /*attrs=*/llvm::ArrayRef<mlir::NamedAttribute>{});
+
+    selectorRefGlobal.setExternallyInitializedAttr(builder.getUnitAttr());
+    selectorRefGlobal.setSectionAttr(builder.getStringAttr("objc_selrefs"));
+
+    // Initialize with pointer to method name string
+    auto &initRegion = selectorRefGlobal.getInitializerRegion();
+    auto *initBlock = builder.createBlock(&initRegion);
+    builder.setInsertionPointToStart(initBlock);
+    // IMPORTANT: Create AddressOfOp INSIDE the initializer region to avoid SSA dominance violation
+    mlir::Value methodVarAddr = builder.create<mlir::LLVM::AddressOfOp>(
+        loc, ptrType, methodVarGlobal.getSymName());
+    builder.create<mlir::LLVM::ReturnOp>(loc, methodVarAddr);
+  }
+
+  // Step 3: Load from the selector reference global
+  // This is equivalent to: load ptr, ptr @OBJC_SELECTOR_REFERENCES_<hash>
+  builder.setInsertionPoint(builder.getBlock(), builder.getInsertionPoint());
+  mlir::Value selectorRefAddr = builder.create<mlir::LLVM::AddressOfOp>(
+      loc, ptrType, selectorRefGlobal.getSymName());
+
+  mlir::Value selector = builder.create<mlir::LLVM::LoadOp>(
+      loc, ptrType, selectorRefAddr);
+
+  // Mark the load as invariant - selectors never change once registered
+  if (auto loadOp = selector.getDefiningOp<mlir::LLVM::LoadOp>()) {
+    loadOp->setAttr("invariant.load", builder.getUnitAttr());
+  }
+
+  return selector;
+}
+
 /// Lowering for cir.objc.class_ref - Lower to objc_getClass() call
 mlir::LogicalResult CIRToLLVMObjCClassRefOpLowering::matchAndRewrite(
     cir::ObjCClassRefOp op, OpAdaptor adaptor,
@@ -3481,30 +3565,16 @@ mlir::LogicalResult CIRToLLVMObjCClassRefOpLowering::matchAndRewrite(
 }
 
 /// Lowering for cir.objc.sel_ref - Create selector reference
-/// For MVP, we just call sel_registerName() directly
-/// TODO: Optimize with selector caching/lazy registration
 mlir::LogicalResult CIRToLLVMObjCSelRefOpLowering::matchAndRewrite(
     cir::ObjCSelRefOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
 
-  auto *context = rewriter.getContext();
-  auto module = op->getParentOfType<mlir::ModuleOp>();
-  auto ptrType = mlir::LLVM::LLVMPointerType::get(context);
-
-  // Declare sel_registerName: SEL sel_registerName(const char *name)
-  auto selRegisterNameFunc = getOrDeclareObjCRuntimeFunction(
-      rewriter, module, "sel_registerName", ptrType, {ptrType});
-
-  // Create global string for selector name
+  // Use cached selector global instead of calling sel_registerName
   llvm::StringRef selectorName = op.getName();
-  mlir::Value selectorNameStr = createGlobalString(
-      op.getLoc(), rewriter, selectorName, selectorName);
+  mlir::Value sel = getOrCreateCachedObjCSelector(
+      op.getLoc(), rewriter, selectorName);
 
-  // Call sel_registerName
-  auto callOp = rewriter.create<mlir::LLVM::CallOp>(
-      op.getLoc(), selRegisterNameFunc, mlir::ValueRange{selectorNameStr});
-
-  rewriter.replaceOp(op, callOp.getResult());
+  rewriter.replaceOp(op, sel);
   return mlir::success();
 }
 
@@ -3531,16 +3601,11 @@ mlir::LogicalResult CIRToLLVMObjCMessageOpLowering::matchAndRewrite(
   // Get selector string
   llvm::StringRef selectorName = op.getSelector();
 
-  // Create SEL by calling sel_registerName
-  mlir::Value selectorNameStr = createGlobalString(
-      op.getLoc(), rewriter, selectorName, selectorName);
-
-  auto selRegisterNameFunc = getOrDeclareObjCRuntimeFunction(
-      rewriter, module, "sel_registerName", ptrType, {ptrType});
-
-  auto selCallOp = rewriter.create<mlir::LLVM::CallOp>(
-      op.getLoc(), selRegisterNameFunc, mlir::ValueRange{selectorNameStr});
-  mlir::Value sel = selCallOp.getResult();
+  // Create SEL using cached global selector reference (efficient!)
+  // This matches traditional Clang's approach: load from @OBJC_SELECTOR_REFERENCES_
+  // instead of calling sel_registerName() every time
+  mlir::Value sel = getOrCreateCachedObjCSelector(
+      op.getLoc(), rewriter, selectorName);
 
   // Determine result type from CIR operation
   mlir::Type actualResultType;
@@ -3622,17 +3687,10 @@ mlir::LogicalResult CIRToLLVMObjCMessageSuperOpLowering::matchAndRewrite(
   // };
   // id objc_msgSendSuper2(struct objc_super *super, SEL sel, ...);
 
-  // Get selector
+  // Get selector using cached global selector reference
   llvm::StringRef selectorName = op.getSelector();
-  mlir::Value selectorNameStr = createGlobalString(
-      op.getLoc(), rewriter, selectorName, selectorName);
-
-  auto selRegisterNameFunc = getOrDeclareObjCRuntimeFunction(
-      rewriter, module, "sel_registerName", ptrType, {ptrType});
-
-  auto selCallOp = rewriter.create<mlir::LLVM::CallOp>(
-      op.getLoc(), selRegisterNameFunc, mlir::ValueRange{selectorNameStr});
-  mlir::Value sel = selCallOp.getResult();
+  mlir::Value sel = getOrCreateCachedObjCSelector(
+      op.getLoc(), rewriter, selectorName);
 
   // Get super class using objc_getClass
   llvm::StringRef superClassName = op.getSuperClass();

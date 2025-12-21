@@ -21,7 +21,7 @@ int testInstanceMessage(MyClass *obj) {
 // CIR-SAME: -> !cir.int<s, 32>
 
 // LLVM-LABEL: define {{.*}} @testInstanceMessage
-// LLVM: call ptr @sel_registerName(ptr @.str.getValue)
+// LLVM: load ptr, ptr @OBJC_SELECTOR_REFERENCES_
 // LLVM: call ptr (ptr, ptr, ...) @objc_msgSend(ptr %{{.*}}, ptr %{{.*}})
 // LLVM: ptrtoint ptr %{{.*}} to i32
 
@@ -36,7 +36,7 @@ int testMessageWithArgs(MyClass *obj) {
 // CIR-SAME: -> !cir.int<s, 32>
 
 // LLVM-LABEL: define {{.*}} @testMessageWithArgs
-// LLVM: call ptr @sel_registerName(ptr @".str.addX:andY:")
+// LLVM: load ptr, ptr @OBJC_SELECTOR_REFERENCES_
 // LLVM: call ptr (ptr, ptr, ...) @objc_msgSend(ptr %{{.*}}, ptr %{{.*}}, i32 10, i32 20)
 
 // Test 3: Class message
@@ -52,7 +52,7 @@ MyClass *testClassMessage(void) {
 
 // LLVM-LABEL: define {{.*}} @testClassMessage
 // LLVM: call ptr @objc_getClass(ptr @.str.MyClass)
-// LLVM: call ptr @sel_registerName(ptr @.str.alloc)
+// LLVM: load ptr, ptr @OBJC_SELECTOR_REFERENCES_
 // LLVM: call ptr (ptr, ptr, ...) @objc_msgSend(ptr %{{.*}}, ptr %{{.*}})
 
 // Test 4: Message chain
@@ -67,12 +67,14 @@ MyClass *testMessageChain(void) {
 
 // LLVM-LABEL: define {{.*}} @testMessageChain
 // LLVM: call ptr @objc_getClass(ptr @.str.MyClass)
-// LLVM: call ptr @sel_registerName(ptr @.str.alloc)
+// LLVM: load ptr, ptr @OBJC_SELECTOR_REFERENCES_
 // LLVM: call ptr (ptr, ptr, ...) @objc_msgSend
-// LLVM: call ptr @sel_registerName(ptr @.str.init)
+// LLVM: load ptr, ptr @OBJC_SELECTOR_REFERENCES_
 // LLVM: call ptr (ptr, ptr, ...) @objc_msgSend
 
 // Verify runtime function declarations
 // LLVM-DAG: declare ptr @objc_msgSend(ptr, ptr, ...)
-// LLVM-DAG: declare ptr @sel_registerName(ptr)
 // LLVM-DAG: declare ptr @objc_getClass(ptr)
+// Verify selector caching globals are created
+// LLVM-DAG: @OBJC_METH_VAR_NAME_{{.*}} = private unnamed_addr constant
+// LLVM-DAG: @OBJC_SELECTOR_REFERENCES_{{.*}} = private externally_initialized global ptr @OBJC_METH_VAR_NAME_{{.*}}, section "objc_selrefs"
