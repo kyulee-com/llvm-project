@@ -4245,7 +4245,9 @@ def CIR_ObjCMessageOp : CIR_Op<"objc.message", [
     StrAttr:$selector,                // selector string (e.g., "doSomething")
     Variadic<CIR_AnyType>:$arguments, // method arguments
     TypeAttr:$receiverType,           // original receiver type (for metadata/optimization)
-    OptionalAttr<UnitAttr>:$isClassMessage // true for class messages
+    OptionalAttr<UnitAttr>:$isClassMessage, // true for class messages
+    OptionalAttr<UnitAttr>:$isDirect, // true for objc_direct methods (no dynamic dispatch)
+    OptionalAttr<StrAttr>:$directMethodImplSymbol // symbol name for direct method impl (e.g., "\01-[MyClass getValue]")
   );
 
   let results = (outs Optional<CIR_AnyType>:$result);
@@ -4262,11 +4264,15 @@ def CIR_ObjCMessageOp : CIR_Op<"objc.message", [
                    "mlir::ValueRange":$arguments,
                    "mlir::Type":$resultType,
                    "mlir::Type":$receiverType,
-                   "bool":$isClassMessage), [{
+                   "bool":$isClassMessage,
+                   "bool":$isDirect,
+                   CArg<"llvm::StringRef", "\"\"">:$directMethodImplSymbol), [{
       build($_builder, $_state, resultType, receiver,
             $_builder.getStringAttr(selector), arguments,
             mlir::TypeAttr::get(receiverType),
-            isClassMessage ? $_builder.getUnitAttr() : mlir::UnitAttr());
+            isClassMessage ? $_builder.getUnitAttr() : mlir::UnitAttr(),
+            isDirect ? $_builder.getUnitAttr() : mlir::UnitAttr(),
+            !directMethodImplSymbol.empty() ? $_builder.getStringAttr(directMethodImplSymbol) : mlir::StringAttr());
     }]>
   ];
 }

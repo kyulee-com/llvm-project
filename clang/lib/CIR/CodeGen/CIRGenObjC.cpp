@@ -274,12 +274,58 @@ RValue CIRGenFunction::emitObjCMessageExpr(const ObjCMessageExpr *E) {
   // - receiver value and its type
   // - selector as a string
   // - whether it's a class message
+  // - whether it's a direct method (objc_direct attribute)
   // - argument types
   // - return type
   //
   // Compare to LLVM IR which just has:
   // call i8* @objc_msgSend(i8* %receiver, i8* %sel, ...)
   // ↑ Everything is i8*, no selector string, no class info!
+
+  // 🎯 DEVIRTUALIZATION OPPORTUNITY: Check for objc_direct methods
+  // Direct methods bypass the dynamic dispatch machinery and compile to
+  // direct function calls, providing 3-5x performance improvement
+  bool isDirect = false;
+  std::string directMethodSymbol;
+
+  // Try to get the method declaration
+  const ObjCMethodDecl *method = E->getMethodDecl();
+
+  // If getMethodDecl() returns null (common for interface-only declarations),
+  // look up the method in the receiver's interface
+  if (!method && E->getReceiverKind() == ObjCMessageExpr::Instance) {
+    if (const ObjCObjectPointerType *objPtrType =
+            E->getInstanceReceiver()->getType()->getAs<ObjCObjectPointerType>()) {
+      if (const ObjCInterfaceDecl *iface = objPtrType->getInterfaceDecl()) {
+        method = iface->lookupInstanceMethod(E->getSelector());
+      }
+    }
+  } else if (!method && E->getReceiverKind() == ObjCMessageExpr::Class) {
+    if (const ObjCInterfaceType *ifaceType = E->getClassReceiver()->getAs<ObjCInterfaceType>()) {
+      if (const ObjCInterfaceDecl *iface = ifaceType->getDecl()) {
+        method = iface->lookupClassMethod(E->getSelector());
+      }
+    }
+  }
+
+  if (method) {
+    // If the method is statically known and has objc_direct attribute,
+    // we can generate a direct call instead of objc_msgSend
+    isDirect = method->isDirectMethod();
+
+    if (isDirect) {
+      // Generate the method implementation symbol name
+      // Format: "\01-[ClassName selectorName]" for instance methods
+      //         "\01+[ClassName selectorName]" for class methods
+      const ObjCInterfaceDecl *classInterface = method->getClassInterface();
+      std::string className = classInterface->getNameAsString();
+
+      llvm::raw_string_ostream symbolStream(directMethodSymbol);
+      symbolStream << "\01" << (method->isInstanceMethod() ? '-' : '+')
+                   << "[" << className << " " << selectorStr << "]";
+      symbolStream.flush();
+    }
+  }
 
   auto msgOp = builder.create<cir::ObjCMessageOp>(
       getLoc(E->getExprLoc()),
@@ -288,7 +334,9 @@ RValue CIRGenFunction::emitObjCMessageExpr(const ObjCMessageExpr *E) {
       llvm::StringRef(selectorStr),
       args,
       receiverType,
-      isClassMessage ? builder.getUnitAttr() : mlir::UnitAttr());
+      isClassMessage ? builder.getUnitAttr() : mlir::UnitAttr(),
+      isDirect ? builder.getUnitAttr() : mlir::UnitAttr(),
+      directMethodSymbol.empty() ? mlir::StringAttr() : builder.getStringAttr(directMethodSymbol));
 
   if (resultType->isVoidType()) {
     return RValue::get(nullptr);
