@@ -2309,6 +2309,19 @@ static void prepareTypeConverter(mlir::LLVMTypeConverter &converter,
   converter.addConversion([&](cir::BF16Type type) -> mlir::Type {
     return mlir::BFloat16Type::get(type.getContext());
   });
+  // Objective-C types all lower to opaque pointers (i8*)
+  converter.addConversion([&](cir::ObjCIdType type) -> mlir::Type {
+    return mlir::LLVM::LLVMPointerType::get(type.getContext());
+  });
+  converter.addConversion([&](cir::ObjCClassType type) -> mlir::Type {
+    return mlir::LLVM::LLVMPointerType::get(type.getContext());
+  });
+  converter.addConversion([&](cir::ObjCSELType type) -> mlir::Type {
+    return mlir::LLVM::LLVMPointerType::get(type.getContext());
+  });
+  converter.addConversion([&](cir::ObjCInterfaceType type) -> mlir::Type {
+    return mlir::LLVM::LLVMPointerType::get(type.getContext());
+  });
   converter.addConversion([&](cir::ComplexType type) -> mlir::Type {
     // A complex type is lowered to an LLVM struct that contains the real and
     // imaginary part as data fields.
@@ -3529,25 +3542,23 @@ mlir::LogicalResult CIRToLLVMObjCMessageOpLowering::matchAndRewrite(
       op.getLoc(), selRegisterNameFunc, mlir::ValueRange{selectorNameStr});
   mlir::Value sel = selCallOp.getResult();
 
-  // Determine result type
-  mlir::Type resultType;
+  // Determine result type from CIR operation
+  mlir::Type actualResultType;
   if (op.getResult()) {
-    resultType = getTypeConverter()->convertType(op.getResult().getType());
+    actualResultType = getTypeConverter()->convertType(op.getResult().getType());
   } else {
-    // Void return
-    resultType = mlir::LLVM::LLVMVoidType::get(context);
+    actualResultType = mlir::LLVM::LLVMVoidType::get(context);
   }
 
   // Build objc_msgSend function type: id objc_msgSend(id receiver, SEL sel, ...)
-  // Note: objc_msgSend is variadic!
+  // IMPORTANT: objc_msgSend always returns 'id' (ptr) in its signature!
+  // We'll cast the result to the actual type if needed.
   llvm::SmallVector<mlir::Type> msgSendArgTypes = {ptrType, ptrType};
-  auto msgSendFuncType = mlir::LLVM::LLVMFunctionType::get(
-      resultType, msgSendArgTypes, /*isVarArg=*/true);
+  auto msgSendResultType = ptrType;  // Always returns id (ptr)
 
-  // Declare objc_msgSend
-  // TODO: Handle objc_msgSend variants (stret, fpret, etc.) based on result type
+  // Declare objc_msgSend - always with ptr return type
   auto msgSendFunc = getOrDeclareObjCRuntimeFunction(
-      rewriter, module, "objc_msgSend", resultType, msgSendArgTypes,
+      rewriter, module, "objc_msgSend", msgSendResultType, msgSendArgTypes,
       /*isVarArg=*/true);
 
   // Build call arguments: receiver, sel, method args...
@@ -3565,7 +3576,23 @@ mlir::LogicalResult CIRToLLVMObjCMessageOpLowering::matchAndRewrite(
       op.getLoc(), msgSendFunc, callArgs);
 
   if (op.getResult()) {
-    rewriter.replaceOp(op, callOp.getResult());
+    mlir::Value result = callOp.getResult();
+
+    // Cast from id (ptr) to actual result type if needed
+    if (result.getType() != actualResultType) {
+      if (mlir::isa<mlir::IntegerType>(actualResultType)) {
+        // Cast ptr to integer: ptrtoint
+        result = rewriter.create<mlir::LLVM::PtrToIntOp>(
+            op.getLoc(), actualResultType, result);
+      } else if (actualResultType != ptrType) {
+        // For other pointer types, bitcast
+        result = rewriter.create<mlir::LLVM::BitcastOp>(
+            op.getLoc(), actualResultType, result);
+      }
+      // If actualResultType == ptrType, no cast needed
+    }
+
+    rewriter.replaceOp(op, result);
   } else {
     rewriter.eraseOp(op);
   }

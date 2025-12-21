@@ -1434,6 +1434,9 @@ void CIRGenModule::emitTopLevelDecl(Decl *decl) {
   case Decl::Typedef:
   case Decl::TypeAlias: // using foo = bar; [C++11]
   case Decl::Record:
+  case Decl::ObjCInterface:  // @interface declarations
+  case Decl::ObjCProtocol:   // @protocol declarations
+  case Decl::ObjCCategory:   // @interface(Category) declarations
     assert(!cir::MissingFeatures::generateDebugInfo());
     break;
 
