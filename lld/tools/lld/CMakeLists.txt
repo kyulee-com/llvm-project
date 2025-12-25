@@ -5,6 +5,7 @@ set(LLVM_LINK_COMPONENTS
 
 add_lld_tool(lld
   lld.cpp
+  hash_memory_impl.cpp
 
   SUPPORT_PLUGINS
   GENERATE_DRIVER

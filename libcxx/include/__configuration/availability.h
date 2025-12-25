@@ -350,6 +350,12 @@
 #define _LIBCPP_AVAILABILITY_HAS_HASH_MEMORY _LIBCPP_INTRODUCED_IN_LLVM_21
 // No attribute, since we've had hash in the headers before
 
+// Force inline implementation for cross-compilation compatibility.
+#if !defined(_LIBCPP_BUILDING_LIBRARY)
+#  undef _LIBCPP_AVAILABILITY_HAS_HASH_MEMORY
+#  define _LIBCPP_AVAILABILITY_HAS_HASH_MEMORY 0
+#endif
+
 // This controls whether we provide a message for `bad_function_call::what()` that specific to `std::bad_function_call`.
 // See https://wg21.link/LWG2233. This requires `std::bad_function_call::what()` to be available in the dylib.
 #define _LIBCPP_AVAILABILITY_HAS_BAD_FUNCTION_CALL_GOOD_WHAT_MESSAGE _LIBCPP_INTRODUCED_IN_LLVM_21
