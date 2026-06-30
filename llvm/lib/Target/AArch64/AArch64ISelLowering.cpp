@@ -10275,6 +10275,9 @@ AArch64TargetLowering::LowerCall(CallLoweringInfo &CLI,
     assert(FPDiff % 16 == 0 && "unaligned stack on tail call");
   }
 
+  if (DAG.getTarget().Options.ShouldEmitCodeGenCallSiteInfo())
+    CSInfo.HasStackArguments = NumBytes != 0;
+
   auto DescribeCallsite =
       [&](OptimizationRemarkAnalysis &R) -> OptimizationRemarkAnalysis & {
     R << "call from '" << ore::NV("Caller", MF.getName()) << "' to '";

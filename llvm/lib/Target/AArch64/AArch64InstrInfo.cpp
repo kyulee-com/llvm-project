@@ -10989,16 +10989,34 @@ AArch64InstrInfo::getOutliningTypeImpl(const MachineModuleInfo &MMI,
         MI.getOpcode() == AArch64::BLRNoIP || MI.getOpcode() == AArch64::BL)
       UnknownCallOutlineType = outliner::InstrType::LegalTerminator;
 
-    if (!Callee)
+    auto HasNoStackArguments = [&]() {
+      if (UnknownCallOutlineType == outliner::InstrType::Illegal)
+        return false;
+      if (!MI.getMF()->getTarget().Options.ShouldEmitCodeGenCallSiteInfo())
+        return false;
+      auto It = MI.getMF()->getCallSitesInfo().find(&MI);
+      if (It == MI.getMF()->getCallSitesInfo().end() ||
+          !It->second.HasStackArguments)
+        return false;
+      return !*It->second.HasStackArguments;
+    };
+
+    if (!Callee) {
+      if (HasNoStackArguments())
+        return outliner::InstrType::Legal;
       return UnknownCallOutlineType;
+    }
 
     // We have a function we have information about. Check it if it's something
     // can safely outline.
     MachineFunction *CalleeMF = MMI.getMachineFunction(*Callee);
 
     // We don't know what's going on with the callee at all. Don't touch it.
-    if (!CalleeMF)
+    if (!CalleeMF) {
+      if (HasNoStackArguments())
+        return outliner::InstrType::Legal;
       return UnknownCallOutlineType;
+    }
 
     // Check if we know anything about the callee saves on the function. If we
     // don't, then don't touch it, since that implies that we haven't

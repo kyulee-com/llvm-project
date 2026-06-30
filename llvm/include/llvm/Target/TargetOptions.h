@@ -290,16 +290,12 @@ public:
   /// Emit section containing call graph metadata.
   unsigned EmitCallGraphSection : 1;
 
-  /// The flag enables call site info production. It is used only for debug
-  /// info, and it is restricted only to optimized code. This can be used for
-  /// something else, so that should be controlled in the frontend.
-  /// This flag should never be checked directly, always use
-  /// \ref ShouldEmitCallSiteInfo instead.
+  /// The frontend-requested flag for debug call site info production.
   unsigned EmitCallSiteInfo : 1;
-  /// Returns true when call site info should be emitted. This combines
-  /// the frontend-controlled EmitCallSiteInfo flag with the
-  /// -force-emit-call-site-info LLVM option, which allows enabling call site
-  /// info production without requiring frontend source changes.
+  /// Returns true when call site info should be emitted for codegen users.
+  LLVM_ABI bool ShouldEmitCodeGenCallSiteInfo() const;
+  /// Returns true when call site info should be preserved for either frontend-
+  /// requested debug info or codegen users.
   LLVM_ABI bool ShouldEmitCallSiteInfo() const;
 
   /// Set if the target supports the debug entry values by default.

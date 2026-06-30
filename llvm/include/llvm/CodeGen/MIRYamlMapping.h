@@ -512,6 +512,7 @@ struct CallSiteInfo {
   std::vector<ArgRegPair> ArgForwardingRegs;
   /// Numeric callee type identifiers for the callgraph section.
   std::vector<uint64_t> CalleeTypeIds;
+  std::optional<bool> HasStackArguments;
 
   bool operator==(const CallSiteInfo &Other) const {
     return CallLocation.BlockNum == Other.CallLocation.BlockNum &&
@@ -542,6 +543,8 @@ template <> struct MappingTraits<CallSiteInfo> {
     YamlIO.mapOptional("fwdArgRegs", CSInfo.ArgForwardingRegs,
                        std::vector<CallSiteInfo::ArgRegPair>());
     YamlIO.mapOptional("calleeTypeIds", CSInfo.CalleeTypeIds);
+    YamlIO.mapOptional("hasStackArguments", CSInfo.HasStackArguments,
+                       std::optional<bool>());
   }
 
   static const bool flow = true;

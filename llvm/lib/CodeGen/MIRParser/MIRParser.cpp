@@ -533,6 +533,7 @@ bool MIRParserImpl::initializeCallSiteInfo(
                                                         /*isSigned=*/false));
       }
     }
+    CSInfo.HasStackArguments = YamlCSInfo.HasStackArguments;
 
     if (TM.Options.ShouldEmitCallSiteInfo() || TM.Options.EmitCallGraphSection)
       MF.addCallSiteInfo(&*CallI, std::move(CSInfo));

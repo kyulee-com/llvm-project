@@ -560,7 +560,7 @@ static void convertCallSiteObjects(yaml::MachineFunction &YMF,
         std::distance(CallI->getParent()->instr_begin(), CallI);
     YmlCS.CallLocation = CallLocation;
 
-    auto [ArgRegPairs, CalleeTypeIds, _] = CallSiteInfo;
+    auto [ArgRegPairs, CalleeTypeIds, _, HasStackArguments] = CallSiteInfo;
     // Construct call arguments and theirs forwarding register info.
     for (auto ArgReg : ArgRegPairs) {
       yaml::CallSiteInfo::ArgRegPair YmlArgReg;
@@ -572,6 +572,7 @@ static void convertCallSiteObjects(yaml::MachineFunction &YMF,
     for (auto *CalleeTypeId : CalleeTypeIds) {
       YmlCS.CalleeTypeIds.push_back(CalleeTypeId->getZExtValue());
     }
+    YmlCS.HasStackArguments = HasStackArguments;
     YMF.CallSitesInfo.push_back(std::move(YmlCS));
   }
 

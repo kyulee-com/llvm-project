@@ -1303,6 +1303,11 @@ bool AArch64CallLowering::lowerTailCall(
 
   // Now we can add the actual call instruction to the correct basic block.
   MIRBuilder.insertInstr(MIB);
+  if (MF.getTarget().Options.ShouldEmitCodeGenCallSiteInfo()) {
+    MachineFunction::CallSiteInfo CSInfo;
+    CSInfo.HasStackArguments = NumBytes != 0;
+    MF.addCallSiteInfo(MIB.getInstr(), std::move(CSInfo));
+  }
 
   // If Callee is a reg, since it is used by a target specific instruction,
   // it must have a register class matching the constraint of that instruction.
@@ -1481,6 +1486,11 @@ bool AArch64CallLowering::lowerCall(MachineIRBuilder &MIRBuilder,
 
   // Now we can add the actual call instruction to the correct basic block.
   MIRBuilder.insertInstr(MIB);
+  if (MF.getTarget().Options.ShouldEmitCodeGenCallSiteInfo()) {
+    MachineFunction::CallSiteInfo CSInfo;
+    CSInfo.HasStackArguments = Assigner.StackSize != 0;
+    MF.addCallSiteInfo(MIB.getInstr(), std::move(CSInfo));
+  }
 
   uint64_t CalleePopBytes =
       doesCalleeRestoreStack(Info.CallConv,

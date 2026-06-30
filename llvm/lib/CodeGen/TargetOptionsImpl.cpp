@@ -72,6 +72,10 @@ bool TargetOptions::ShouldEmitDebugEntryValues() const {
          EnableDebugEntryValues;
 }
 
+bool TargetOptions::ShouldEmitCodeGenCallSiteInfo() const {
+  return ForceEmitCallSiteInfo;
+}
+
 bool TargetOptions::ShouldEmitCallSiteInfo() const {
-  return EmitCallSiteInfo || ForceEmitCallSiteInfo;
+  return EmitCallSiteInfo || ShouldEmitCodeGenCallSiteInfo();
 }

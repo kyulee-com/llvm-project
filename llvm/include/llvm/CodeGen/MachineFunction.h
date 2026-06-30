@@ -38,6 +38,7 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -531,6 +532,8 @@ public:
     /// 'call_target' metadata for the DISubprogram. It is the declaration
     /// or definition of the target function and might be indirect.
     MDNode *CallTarget = nullptr;
+    /// True if call lowering assigned any outgoing arguments to the stack.
+    std::optional<bool> HasStackArguments;
 
     CallSiteInfo() = default;
 
