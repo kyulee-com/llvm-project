@@ -25527,7 +25527,7 @@ SDValue RISCVTargetLowering::LowerCall(CallLoweringInfo &CLI,
       RegsToPass.push_back(std::make_pair(VA.getLocReg(), ArgValue));
 
       const TargetOptions &Options = DAG.getTarget().Options;
-      if (Options.EmitCallSiteInfo)
+      if (Options.ShouldEmitCallSiteInfo())
         CSInfo.ArgRegPairs.emplace_back(VA.getLocReg(), i);
     } else {
       assert(VA.isMemLoc() && "Argument not register or memory");

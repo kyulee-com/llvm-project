@@ -15,8 +15,14 @@
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Target/TargetOptions.h"
 using namespace llvm;
+
+static cl::opt<bool>
+    ForceEmitCallSiteInfo("force-emit-call-site-info",
+                          cl::desc("Force emission of call site info"),
+                          cl::init(false), cl::Hidden);
 
 /// DisableFramePointerElim - This returns true if frame pointer elimination
 /// optimization should be disabled for the given machine function.
@@ -64,4 +70,8 @@ bool TargetOptions::HonorSignDependentRoundingFPMath() const {
 bool TargetOptions::ShouldEmitDebugEntryValues() const {
   return (SupportsDebugEntryValues && DebuggerTuning != DebuggerKind::SCE) ||
          EnableDebugEntryValues;
+}
+
+bool TargetOptions::ShouldEmitCallSiteInfo() const {
+  return EmitCallSiteInfo || ForceEmitCallSiteInfo;
 }

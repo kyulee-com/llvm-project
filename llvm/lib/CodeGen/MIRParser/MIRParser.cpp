@@ -534,12 +534,12 @@ bool MIRParserImpl::initializeCallSiteInfo(
       }
     }
 
-    if (TM.Options.EmitCallSiteInfo || TM.Options.EmitCallGraphSection)
+    if (TM.Options.ShouldEmitCallSiteInfo() || TM.Options.EmitCallGraphSection)
       MF.addCallSiteInfo(&*CallI, std::move(CSInfo));
   }
 
   if (!YamlMF.CallSitesInfo.empty() &&
-      !(TM.Options.EmitCallSiteInfo || TM.Options.EmitCallGraphSection))
+      !(TM.Options.ShouldEmitCallSiteInfo() || TM.Options.EmitCallGraphSection))
     return error("call site info provided but not used");
   return false;
 }

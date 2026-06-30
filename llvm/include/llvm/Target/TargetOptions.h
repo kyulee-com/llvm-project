@@ -293,7 +293,15 @@ public:
   /// The flag enables call site info production. It is used only for debug
   /// info, and it is restricted only to optimized code. This can be used for
   /// something else, so that should be controlled in the frontend.
+  /// This flag should never be checked directly, always use
+  /// \ref ShouldEmitCallSiteInfo instead.
   unsigned EmitCallSiteInfo : 1;
+  /// Returns true when call site info should be emitted. This combines
+  /// the frontend-controlled EmitCallSiteInfo flag with the
+  /// -force-emit-call-site-info LLVM option, which allows enabling call site
+  /// info production without requiring frontend source changes.
+  LLVM_ABI bool ShouldEmitCallSiteInfo() const;
+
   /// Set if the target supports the debug entry values by default.
   unsigned SupportsDebugEntryValues : 1;
   /// When set to true, the EnableDebugEntryValues option forces production
