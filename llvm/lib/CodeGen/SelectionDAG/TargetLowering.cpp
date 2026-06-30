@@ -14290,6 +14290,6 @@ void TargetLowering::setTypeIdForCallsiteInfo(
     MachineFunction::CallSiteInfo &CSInfo) const {
   if (CB && CB->isIndirectCall() &&
       (MF.getTarget().Options.EmitCallGraphSection ||
-       MF.getTarget().Options.ShouldEmitCallSiteInfo()))
+       MF.getTarget().Options.EmitCallSiteInfo))
     CSInfo = MachineFunction::CallSiteInfo(*CB);
 }
