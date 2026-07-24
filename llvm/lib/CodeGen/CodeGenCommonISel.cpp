@@ -12,11 +12,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CodeGen/CodeGenCommonISel.h"
+#include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Analysis/BranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/TargetOpcodes.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 
 #define DEBUG_TYPE "codegen-common"
@@ -110,6 +113,52 @@ static bool MIIsInTerminatorSequence(const MachineInstr &MI) {
   return true;
 }
 
+/// The stack-protector guard check emitted at the split point clobbers the
+/// flags register (e.g. AArch64 NZCV, PowerPC CR, X86 EFLAGS). The terminator
+/// sequence above keeps ABI physical registers together by pulling their
+/// defining copies past the split, but it does not model a flag register that
+/// the instruction scheduler left live across the split point: a flag-defining
+/// compare in the parent region and a flag-consuming instruction (e.g. a select
+/// lowered to CSEL/FCSEL/ISEL) in the split-off region. Splicing there makes
+/// the consumer read an undefined physical register, and the guard compare in
+/// the parent clobbers it (verifier: "Using an undefined physical register").
+///
+/// Detect any unreserved physical-register live range crossing \p SplitPoint
+/// (defined before it, used at/after it) and, if found, move the split point to
+/// the top of the block so the whole def/use pair stays together in the
+/// split-off block. The check only needs to run before the terminator and after
+/// the prologue canary save, so relocating it is safe.
+static MachineBasicBlock::iterator
+avoidSplittingPhysRegLiveRange(MachineBasicBlock *BB,
+                               MachineBasicBlock::iterator SplitPoint) {
+  if (SplitPoint == BB->begin())
+    return SplitPoint;
+  const MachineFunction &MF = *BB->getParent();
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  // Reserved registers (e.g. the stack pointer) are always available and are
+  // legal to keep live across the split. This runs during instruction
+  // selection, before the reserved set is frozen, so query the target rather
+  // than MachineRegisterInfo::isReserved().
+  const BitVector Reserved = TRI.getReservedRegs(MF);
+  // Unreserved physical registers defined in the parent region [begin, split).
+  SmallSet<MCRegister, 8> DefinedBefore;
+  for (auto I = BB->begin(); I != SplitPoint; ++I)
+    for (const MachineOperand &MO : I->operands())
+      if (MO.isReg() && MO.isDef() && MO.getReg().isPhysical() &&
+          !Reserved.test(MO.getReg().id()))
+        DefinedBefore.insert(MO.getReg().asMCReg());
+  if (DefinedBefore.empty())
+    return SplitPoint;
+  // If any of them is used in the split-off region [split, end), the split
+  // would cut that physical-register live range. Sink to the top of the block.
+  for (auto I = SplitPoint, E = BB->end(); I != E; ++I)
+    for (const MachineOperand &MO : I->operands())
+      if (MO.isReg() && MO.isUse() && MO.getReg().isPhysical() &&
+          DefinedBefore.count(MO.getReg().asMCReg()))
+        return BB->SkipPHIsLabelsAndDebug(BB->begin());
+  return SplitPoint;
+}
+
 /// Find the split point at which to splice the end of BB into its success stack
 /// protector check machine basic block.
 ///
@@ -157,10 +206,10 @@ llvm::findSplitPointForStackProtector(MachineBasicBlock *BB,
     do {
       --Previous;
       if (Previous->isCall())
-        return SplitPoint;
+        return avoidSplittingPhysRegLiveRange(BB, SplitPoint);
     } while(Previous->getOpcode() != TII.getCallFrameSetupOpcode());
 
-    return Previous;
+    return avoidSplittingPhysRegLiveRange(BB, Previous);
   }
 
   while (MIIsInTerminatorSequence(*Previous)) {
@@ -170,7 +219,7 @@ llvm::findSplitPointForStackProtector(MachineBasicBlock *BB,
     --Previous;
   }
 
-  return SplitPoint;
+  return avoidSplittingPhysRegLiveRange(BB, SplitPoint);
 }
 
 FPClassTest llvm::invertFPClassTestIfSimpler(FPClassTest Test, bool UseFCmp) {
