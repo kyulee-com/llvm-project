@@ -5647,8 +5647,10 @@ llvm::Constant *CodeGenModule::GetOrCreateLLVMFunction(
   if (Entry) {
     if (WeakRefReferences.erase(Entry)) {
       const FunctionDecl *FD = cast_or_null<FunctionDecl>(D);
-      if (FD && !FD->hasAttr<WeakAttr>())
-        Entry->setLinkage(llvm::Function::ExternalLinkage);
+      // Compiler-generated runtime references have no source declaration, but
+      // are ordinary strong references just like non-weak source declarations.
+      if (!FD || !FD->hasAttr<WeakAttr>())
+        Entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
     }
 
     // Handle dropped DLL attributes.
@@ -5980,8 +5982,9 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
   unsigned TargetAS = getContext().getTargetAddressSpace(AddrSpace);
   if (Entry) {
     if (WeakRefReferences.erase(Entry)) {
-      if (D && !D->hasAttr<WeakAttr>())
-        Entry->setLinkage(llvm::Function::ExternalLinkage);
+      // A compiler-generated lookup with no source declaration is strong.
+      if (!D || !D->hasAttr<WeakAttr>())
+        Entry->setLinkage(llvm::GlobalValue::ExternalLinkage);
     }
 
     // Handle dropped DLL attributes.
