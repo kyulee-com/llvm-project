@@ -2938,7 +2938,7 @@ void CodeGenModule::ConstructAttributeList(StringRef Name,
 
   // Add "sample-profile-suffix-elision-policy" attribute for internal linkage
   // functions with -funique-internal-linkage-names.
-  if (TargetDecl && CodeGenOpts.UniqueInternalLinkageNames) {
+  if (TargetDecl && CodeGenOpts.hasUniqueInternalLinkageNames()) {
     if (const auto *FD = dyn_cast_or_null<FunctionDecl>(TargetDecl)) {
       if (!FD->isExternallyVisible())
         FuncAttrs.addAttribute("sample-profile-suffix-elision-policy",

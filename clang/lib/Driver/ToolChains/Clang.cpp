@@ -5669,8 +5669,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         options::OPT_fdata_sections,
         options::OPT_fno_data_sections,
         options::OPT_fbasic_block_sections_EQ,
-        options::OPT_funique_internal_linkage_names,
-        options::OPT_fno_unique_internal_linkage_names,
+        options::OPT_funique_internal_linkage_names_EQ,
         options::OPT_funique_section_names,
         options::OPT_fno_unique_section_names,
         options::OPT_funique_basic_block_section_names,
@@ -6605,8 +6604,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                      options::OPT_fno_unique_section_names);
   Args.addOptInFlag(CmdArgs, options::OPT_fseparate_named_sections,
                     options::OPT_fno_separate_named_sections);
-  Args.addOptInFlag(CmdArgs, options::OPT_funique_internal_linkage_names,
-                    options::OPT_fno_unique_internal_linkage_names);
+  Args.AddLastArg(CmdArgs, options::OPT_funique_internal_linkage_names_EQ);
   Args.addOptInFlag(CmdArgs, options::OPT_funique_basic_block_section_names,
                     options::OPT_fno_unique_basic_block_section_names);
 
@@ -7485,11 +7483,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     if (Args.hasFlag(options::OPT_fpseudo_probe_for_profiling,
                      options::OPT_fno_pseudo_probe_for_profiling, false)) {
       CmdArgs.push_back("-fpseudo-probe-for-profiling");
-      // Enforce -funique-internal-linkage-names if it's not explicitly turned
-      // off.
-      if (Args.hasFlag(options::OPT_funique_internal_linkage_names,
-                       options::OPT_fno_unique_internal_linkage_names, true))
-        CmdArgs.push_back("-funique-internal-linkage-names");
+      // Enable function uniquing unless the user selected a mode explicitly.
+      if (!Args.getLastArg(options::OPT_funique_internal_linkage_names_EQ))
+        CmdArgs.push_back("-funique-internal-linkage-names=functions");
     }
   }
   RenderBuiltinOptions(TC, RawTriple, Args, CmdArgs);

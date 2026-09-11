@@ -807,6 +807,13 @@ public:
 
   const std::string &getModuleNameHash() const { return ModuleNameHash; }
 
+  /// Return whether GD is selected for a unique internal linkage name.
+  bool shouldUseUniqueInternalLinkageName(GlobalDecl GD);
+
+  /// Keep a variable's companion symbol consistent with its selected name.
+  void appendUniqueInternalLinkagePostfix(const VarDecl &D,
+                                          llvm::raw_ostream &Out);
+
   /// Return a reference to the configured OpenCL runtime.
   CGOpenCLRuntime &getOpenCLRuntime() {
     assert(OpenCLRuntime != nullptr);

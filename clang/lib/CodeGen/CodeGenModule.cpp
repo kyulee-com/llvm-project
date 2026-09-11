@@ -634,7 +634,7 @@ CodeGenModule::CodeGenModule(ASTContext &C,
     CoverageMapping.reset(new CoverageMappingModuleGen(*this, *CoverageInfo));
 
   // Generate the module name hash here if needed.
-  if (CodeGenOpts.UniqueInternalLinkageNames &&
+  if (CodeGenOpts.hasUniqueInternalLinkageNames() &&
       !getModule().getSourceFileName().empty()) {
     SmallString<256> Path(getModule().getSourceFileName());
     // Check if a path substitution is needed from the MacroPrefixMap.
@@ -2469,14 +2469,31 @@ static void AppendCPUSpecificCPUDispatchMangling(const CodeGenModule &CGM,
     Out << ".resolver";
 }
 
-// Returns true if GD is a function decl with internal linkage and
+// Returns true if GD is a function or variable with internal linkage and
 // needs a unique suffix after the mangled name.
-static bool isUniqueInternalLinkageDecl(GlobalDecl GD,
-                                        CodeGenModule &CGM) {
+bool CodeGenModule::shouldUseUniqueInternalLinkageName(GlobalDecl GD) {
   const Decl *D = GD.getDecl();
-  return !CGM.getModuleNameHash().empty() && isa<FunctionDecl>(D) &&
-         !D->hasAttr<AsmLabelAttr>() &&
-         (CGM.getFunctionLinkage(GD) == llvm::GlobalValue::InternalLinkage);
+  if (getModuleNameHash().empty() || D->hasAttr<AsmLabelAttr>())
+    return false;
+  if (isa<FunctionDecl>(D))
+    return getFunctionLinkage(GD) == llvm::GlobalValue::InternalLinkage;
+  if (!getCodeGenOpts().hasUniqueInternalLinkageDataNames())
+    return false;
+
+  const auto *VD = dyn_cast<VarDecl>(D);
+  if (!VD)
+    return false;
+  if (getLangOpts().HLSL &&
+      hlsl::isInitializedByPipeline(GetGlobalVarAddressSpace(VD)))
+    return false;
+  if (getContext().GetGVALinkageForVariable(VD) == GVA_Internal)
+    return true;
+
+  // C gives a function-scope static the enclosing function's formal linkage
+  // even though CodeGen emits the storage with internal LLVM linkage.
+  return !getLangOpts().CPlusPlus && VD->isStaticLocal() &&
+         getLLVMLinkageVarDefinition(VD) ==
+             llvm::GlobalValue::InternalLinkage;
 }
 
 static bool
@@ -2488,6 +2505,17 @@ canResolveUniqueInternalLinkageReferences(const CodeGenModule &CGM) {
   // reference state across those boundaries.
   return !LangOpts.IncrementalExtensions && !LangOpts.CUDA &&
          !LangOpts.OpenMPIsTargetDevice;
+}
+
+static bool canBeUniqueInternalLinkageReferenceTarget(
+    const CodeGenModule &CGM, GlobalDecl GD) {
+  const Decl *D = GD.getDecl();
+  const auto *VD = dyn_cast<VarDecl>(D);
+  // C and Objective-C use a CodeGen-specific ordinary name for local statics
+  // that getMangledNameImpl cannot reconstruct. C++ local statics have an ABI
+  // name and can be named directly by an alias string.
+  return isa<FunctionDecl>(D) ||
+         (VD && (!VD->isStaticLocal() || CGM.getLangOpts().CPlusPlus));
 }
 
 static std::string
@@ -2503,6 +2531,11 @@ getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD, const NamedDecl *ND,
       UseUniqueInternalLinkageNames
           ? MC.shouldMangleDeclName(ND)
           : MC.shouldMangleDeclNameWithoutUniqueInternalLinkageNames(ND);
+  // Route selected variables through the ABI mangler before adding the suffix.
+  // A suffix on a bare identifier would not form a demangleable name.
+  if (UseUniqueInternalLinkageNames && isa<VarDecl>(ND) &&
+      CGM.shouldUseUniqueInternalLinkageName(GD))
+    ShouldMangle = true;
   if (ShouldMangle)
     MC.mangleName(GD.getWithDecl(ND), Out);
   else {
@@ -2531,15 +2564,14 @@ getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD, const NamedDecl *ND,
 
   // Check if the module name hash should be appended for internal linkage
   // symbols.   This should come before multi-version target suffixes are
-  // appended. This is to keep the name and module hash suffix of the
-  // internal linkage function together.  The unique suffix should only be
-  // added when name mangling is done to make sure that the final name can
-  // be properly demangled.  For example, for C functions without prototypes,
-  // name mangling is not done and the unique suffix should not be appeneded
-  // then.
+  // appended. This keeps an internal function's name and module hash suffix
+  // together. The unique suffix is only added to a mangled name so the result
+  // can be demangled. For example, C functions without prototypes are not
+  // mangled and therefore do not receive the suffix. Selected variables are
+  // explicitly routed through the ABI mangler above.
   if (UseUniqueInternalLinkageNames && ShouldMangle &&
-      isUniqueInternalLinkageDecl(GD, CGM)) {
-    assert(CGM.getCodeGenOpts().UniqueInternalLinkageNames &&
+      CGM.shouldUseUniqueInternalLinkageName(GD)) {
+    assert(CGM.getCodeGenOpts().hasUniqueInternalLinkageNames() &&
            "Hash computed when not explicitly requested");
     Out << CGM.getModuleNameHash();
   }
@@ -2590,6 +2622,12 @@ getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD, const NamedDecl *ND,
     CGM.printPostfixForExternalizedDecl(Out, ND);
 
   return std::string(Out.str());
+}
+
+void CodeGenModule::appendUniqueInternalLinkagePostfix(const VarDecl &D,
+                                                       llvm::raw_ostream &Out) {
+  if (shouldUseUniqueInternalLinkageName(GlobalDecl(&D)))
+    Out << getModuleNameHash();
 }
 
 void CodeGenModule::recordUniqueInternalLinkageTarget(GlobalDecl GD,
@@ -2707,7 +2745,8 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
   std::string OriginalName;
   bool UseUniqueInternalLinkageNames = true;
   if (canResolveUniqueInternalLinkageReferences(*this) &&
-      isUniqueInternalLinkageDecl(GD, *this)) {
+      canBeUniqueInternalLinkageReferenceTarget(*this, GD) &&
+      shouldUseUniqueInternalLinkageName(GD)) {
     OriginalName =
         getMangledNameImpl(*this, GD, ND, /*OmitMultiVersionMangling=*/false,
                            /*UseUniqueInternalLinkageNames=*/false);
@@ -7262,8 +7301,11 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
   assert(AA && "Not an alias?");
 
   StringRef MangledName = getMangledName(GD);
+  bool ResolveUniqueTarget =
+      isa<FunctionDecl>(D) ||
+      (isa<VarDecl>(D) && getCodeGenOpts().hasUniqueInternalLinkageDataNames());
   std::string AliaseeName =
-      isa<FunctionDecl>(D)
+      ResolveUniqueTarget
           ? resolveUniqueInternalLinkageReference(AA->getAliasee())
           : AA->getAliasee().str();
 
@@ -7291,7 +7333,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
                                       /*ForVTable=*/false);
     LT = getFunctionLinkage(GD);
   } else {
-    Aliasee = GetOrCreateLLVMGlobal(AA->getAliasee(), DeclTy, LangAS::Default,
+    Aliasee = GetOrCreateLLVMGlobal(AliaseeName, DeclTy, LangAS::Default,
                                     /*D=*/nullptr);
     if (const auto *VD = dyn_cast<VarDecl>(GD.getDecl()))
       LT = getLLVMLinkageVarDefinition(VD);

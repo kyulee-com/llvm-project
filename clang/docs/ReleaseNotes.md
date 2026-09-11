@@ -262,10 +262,19 @@ features cannot lower the translation-unit ABI level;
 - All options of the `-fzero-call-used-regs` compiler flag are now allowed on RISC-V.
 
 - In regular host compilation, `-funique-internal-linkage-names` now preserves
-  GNU `alias` and `ifunc` references to internal functions on a best-effort
-  basis. If a target has already received a unique name, Clang uses that name
-  for the reference. If the reference is seen first, the target keeps its
-  ordinary assembler name.
+  GNU `alias` and `ifunc` references to selected internal symbols on a
+  best-effort basis. If a target has already received a unique name, Clang uses
+  that name for the reference. If the reference is seen first, the target keeps
+  its ordinary assembler name.
+
+- `-funique-internal-linkage-names` now accepts `functions`, `all`, and `none`.
+  The bare option remains an alias for `=functions` and preserves its existing
+  behavior. `=all` additionally gives eligible internal variables and their
+  guard variables a unique `.__uniq.<module-hash>` suffix. Data uniquing is
+  explicitly opt-in because renaming data can affect linker scripts,
+  symbol-ordering files, and other name-based tools. With the Itanium ABI, a C
+  file-scope static such as `glob` becomes `_ZL4glob.__uniq.<module-hash>`;
+  GNU libiberty does not currently demangle this suffixed data spelling.
 
 ### Removed Compiler Flags
 

@@ -239,7 +239,8 @@ void CodeGenFunction::EmitVarDecl(const VarDecl &D) {
 }
 
 static std::string getStaticDeclName(CodeGenModule &CGM, const VarDecl &D) {
-  if (CGM.getLangOpts().CPlusPlus)
+  if (CGM.getLangOpts().CPlusPlus ||
+      CGM.shouldUseUniqueInternalLinkageName(GlobalDecl(&D)))
     return CGM.getMangledName(&D).str();
 
   // If this isn't C++, we don't need a mangled name, just a pretty one.

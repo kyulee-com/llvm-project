@@ -302,30 +302,31 @@ std::string CGNVCUDARuntime::getDeviceSideName(const NamedDecl *ND) {
     GD = GlobalDecl(FD, KernelReferenceKind::Kernel);
   else
     GD = GlobalDecl(ND);
-  std::string DeviceSideName;
   MangleContext *MC;
   if (CGM.getLangOpts().CUDAIsDevice)
     MC = &CGM.getCXXABI().getMangleContext();
   else
     MC = DeviceMC.get();
-  if (MC->shouldMangleDeclName(ND)) {
-    SmallString<256> Buffer;
-    llvm::raw_svector_ostream Out(Buffer);
+
+  bool UniqueData = isa<VarDecl>(ND) &&
+                    CGM.shouldUseUniqueInternalLinkageName(GD) &&
+                    !CGM.getContext().shouldExternalize(ND);
+  bool ShouldMangle = MC->shouldMangleDeclName(ND) || UniqueData;
+  SmallString<256> Buffer;
+  llvm::raw_svector_ostream Out(Buffer);
+  if (ShouldMangle)
     MC->mangleName(GD, Out);
-    DeviceSideName = std::string(Out.str());
-  } else
-    DeviceSideName = std::string(ND->getIdentifier()->getName());
+  else
+    Out << ND->getIdentifier()->getName();
+
+  if (UniqueData)
+    Out << CGM.getModuleNameHash();
 
   // Make unique name for device side static file-scope variable for HIP.
   if (CGM.getContext().shouldExternalize(ND) &&
-      CGM.getLangOpts().GPURelocatableDeviceCode) {
-    SmallString<256> Buffer;
-    llvm::raw_svector_ostream Out(Buffer);
-    Out << DeviceSideName;
+      CGM.getLangOpts().GPURelocatableDeviceCode)
     CGM.printPostfixForExternalizedDecl(Out, ND);
-    DeviceSideName = std::string(Out.str());
-  }
-  return DeviceSideName;
+  return std::string(Out.str());
 }
 
 void CGNVCUDARuntime::emitDeviceStub(CodeGenFunction &CGF,

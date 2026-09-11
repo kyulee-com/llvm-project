@@ -2726,6 +2726,7 @@ void MicrosoftCXXABI::EmitGuardedInit(CodeGenFunction &CGF, const VarDecl &D,
                                                                Out);
       else
         getMangleContext().mangleStaticGuardVariable(&D, Out);
+      CGM.appendUniqueInternalLinkagePostfix(D, Out);
     }
 
     // Create the guard variable with a zero-initializer. Just absorb linkage,

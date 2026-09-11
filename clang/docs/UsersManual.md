@@ -2809,26 +2809,48 @@ only has an effect on ELF targets.
 (funique_internal_linkage_names)=
 (funique-internal-linkage-names)=
 
-:::{option} -f[no-]unique-internal-linkage-names
+:::{option} -funique-internal-linkage-names[={functions|all|none}], -fno-unique-internal-linkage-names
 
-Controls whether Clang emits a unique (best-effort) symbol name for eligible
-internal-linkage functions. When this option is set, the compiler hashes the
-main source file path from the command line and appends it to those symbols.
-If a program contains multiple objects compiled with the same command-line
-source file path, the symbols are not guaranteed to be unique. This option is
-particularly useful in attributing profile information to the correct function
-when multiple functions with the same private linkage name exist in the binary.
+Controls whether Clang emits unique (best-effort) names for internal-linkage
+symbols. The option is disabled by default. The bare option and
+`-funique-internal-linkage-names=functions` select functions only, preserving
+the historical behavior. `-funique-internal-linkage-names=all` additionally
+selects variables, while `=none` and
+`-fno-unique-internal-linkage-names` disable the feature.
+`-fpseudo-probe-for-profiling` selects function uniquing when no mode was
+specified explicitly.
 
-The arguments to GNU ``alias`` and ``ifunc`` attributes are assembler names.
-If such an attribute names an internal function by its ordinary assembler
-name, Clang keeps the reference valid on a best-effort basis. If the function's
-unique name is already known, Clang uses it for the reference. If the reference
-is seen first, the later function keeps its ordinary name instead. Consequently,
-which functions receive a unique suffix can depend on the order in which their
-names are first needed. This recovery is not applied during incremental, CUDA,
-HIP, or OpenMP target-device code generation.
+For selected symbols, Clang hashes the main source file path from the command
+line and appends it to the symbol name. If a program contains multiple objects
+compiled with the same command-line source file path, the symbols are not
+guaranteed to be unique. Function uniquing is particularly useful in
+attributing profile information to the correct function when multiple
+functions with the same private-linkage name exist in the binary.
 
-``weakref`` attributes and names embedded in inline or module assembly remain
+Data uniquing is an explicit opt-in because changing static-data assembler
+names can affect linker scripts and `--defsym` expressions, symbol-ordering
+files, tools that consume `nm` output, and binary-optimization workflows. A
+variable that normally uses its source identifier may also acquire an ABI
+mangled name before the suffix is appended. LLVM's demangler recognizes the
+suffix on otherwise ABI-mangled function and data names, but GNU libiberty
+currently leaves suffixed data names unchanged. Clang supports data uniquing
+with both the Itanium and Microsoft C++ ABIs. A guard variable associated with
+a uniqued function-local static receives the same suffix. Other
+compiler-generated companions, such as Itanium TLS wrapper and initialization
+functions, retain their ordinary names.
+
+The arguments to GNU `alias` and `ifunc` attributes are assembler names.
+If such an attribute names a selected internal function or variable by its
+ordinary assembler name, Clang keeps the reference valid on a best-effort
+basis. If the symbol's unique name is already known, Clang uses it for the
+reference. If the reference is seen first, the later definition keeps its
+ordinary name instead. Consequently, which symbols receive a unique suffix can
+depend on the order in which their names are first needed. This recovery is not
+applied during incremental, CUDA, HIP, or OpenMP target-device code generation,
+and does not cover multiversion entry points or C and Objective-C local-static
+names synthesized by CodeGen.
+
+`weakref` attributes and names embedded in inline or module assembly remain
 literal assembler names and are not rewritten. Use an explicit assembly label
 on declarations that require a stable spelling; such declarations are exempt
 from uniquing.

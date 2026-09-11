@@ -142,6 +142,22 @@ public:
     All,
   };
 
+  enum class UniqueInternalLinkageNamesKind {
+    None,
+    Functions,
+    All,
+  };
+
+  bool hasUniqueInternalLinkageNames() const {
+    return getUniqueInternalLinkageNames() !=
+           UniqueInternalLinkageNamesKind::None;
+  }
+
+  bool hasUniqueInternalLinkageDataNames() const {
+    return getUniqueInternalLinkageNames() ==
+           UniqueInternalLinkageNamesKind::All;
+  }
+
   enum InlineAsmDialectKind {
     IAD_ATT,
     IAD_Intel,

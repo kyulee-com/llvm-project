@@ -5076,12 +5076,24 @@ defm unique_basic_block_section_names : BoolFOption<"unique-basic-block-section-
   PosFlag<SetTrue, [], [ClangOption, CC1Option],
           "Use unique names for basic block sections (ELF Only)">,
   NegFlag<SetFalse>>;
-defm unique_internal_linkage_names : BoolFOption<"unique-internal-linkage-names",
-  CodeGenOpts<"UniqueInternalLinkageNames">, DefaultFalse,
-  PosFlag<SetTrue, [], [ClangOption, CC1Option],
-          "Uniqueify Internal Linkage Symbol Names by appending"
-            " the MD5 hash of the module path">,
-  NegFlag<SetFalse>>;
+def funique_internal_linkage_names_EQ : Joined<["-"],
+    "funique-internal-linkage-names=">, Group<f_Group>,
+  HelpText<"Select internal linkage symbols to unique by appending a hash of "
+           "the module path">,
+  Values<"none,functions,all">,
+  NormalizedValues<["None", "Functions", "All"]>,
+  NormalizedValuesScope<"CodeGenOptions::UniqueInternalLinkageNamesKind">,
+  MarshallingInfoEnum<CodeGenOpts<"UniqueInternalLinkageNames">, "None">,
+  Visibility<[ClangOption, CC1Option]>;
+def funique_internal_linkage_names : Flag<["-"],
+    "funique-internal-linkage-names">, Group<f_Group>,
+  Alias<funique_internal_linkage_names_EQ>, AliasArgs<["functions"]>,
+  HelpText<"Alias for -funique-internal-linkage-names=functions">,
+  Visibility<[ClangOption, CC1Option]>;
+def fno_unique_internal_linkage_names : Flag<["-"],
+    "fno-unique-internal-linkage-names">, Group<f_Group>,
+  Alias<funique_internal_linkage_names_EQ>, AliasArgs<["none"]>,
+  Visibility<[ClangOption, CC1Option]>;
 defm unique_section_names : BoolFOption<"unique-section-names",
   CodeGenOpts<"UniqueSectionNames">, DefaultTrue,
   NegFlag<SetFalse, [], [ClangOption, CC1Option],

@@ -2782,6 +2782,7 @@ void ItaniumCXXABI::EmitGuardedInit(CodeGenFunction &CGF,
     {
       llvm::raw_svector_ostream out(guardName);
       getMangleContext().mangleStaticGuardVariable(&D, out);
+      CGM.appendUniqueInternalLinkagePostfix(D, out);
     }
 
     // Create the guard variable with a zero-initializer.
