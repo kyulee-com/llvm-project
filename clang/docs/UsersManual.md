@@ -2811,14 +2811,27 @@ only has an effect on ELF targets.
 
 :::{option} -f[no-]unique-internal-linkage-names
 
-Controls whether Clang emits a unique (best-effort) symbol name for internal
-linkage symbols.  When this option is set, compiler hashes the main source
-file path from the command line and appends it to all internal symbols. If a
-program contains multiple objects compiled with the same command-line source
-file path, the symbols are not guaranteed to be unique.  This option is
-particularly useful in attributing profile information to the correct
-function when multiple functions with the same private linkage name exist
-in the binary.
+Controls whether Clang emits a unique (best-effort) symbol name for eligible
+internal-linkage functions. When this option is set, the compiler hashes the
+main source file path from the command line and appends it to those symbols.
+If a program contains multiple objects compiled with the same command-line
+source file path, the symbols are not guaranteed to be unique. This option is
+particularly useful in attributing profile information to the correct function
+when multiple functions with the same private linkage name exist in the binary.
+
+The arguments to GNU ``alias`` and ``ifunc`` attributes are assembler names.
+If such an attribute names an internal function by its ordinary assembler
+name, Clang keeps the reference valid on a best-effort basis. If the function's
+unique name is already known, Clang uses it for the reference. If the reference
+is seen first, the later function keeps its ordinary name instead. Consequently,
+which functions receive a unique suffix can depend on the order in which their
+names are first needed. This recovery is not applied during incremental, CUDA,
+HIP, or OpenMP target-device code generation.
+
+``weakref`` attributes and names embedded in inline or module assembly remain
+literal assembler names and are not rewritten. Use an explicit assembly label
+on declarations that require a stable spelling; such declarations are exempt
+from uniquing.
 
 It should be noted that this option cannot guarantee uniqueness and the
 following is an example where it is not unique when two modules contain

@@ -36,6 +36,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Allocator.h"
@@ -503,6 +504,14 @@ private:
   /// An ordered map of canonical GlobalDecls to their mangled names.
   llvm::MapVector<GlobalDecl, StringRef> MangledDeclNames;
   llvm::StringMap<GlobalDecl, llvm::BumpPtrAllocator> Manglings;
+
+  /// Maps ordinary assembler names to internal declarations considered for
+  /// -funique-internal-linkage-names. A null value marks an ambiguous name.
+  llvm::StringMap<std::optional<GlobalDecl>> UniqueInternalLinkageTargets;
+
+  /// Ordinary assembler names that must remain unchanged because a symbolic
+  /// reference was seen before its target declaration.
+  llvm::StringSet<> SuppressedUniqueInternalLinkageNames;
 
   /// Global annotations.
   std::vector<llvm::Constant*> Annotations;
@@ -2089,6 +2098,9 @@ private:
 
   /// Emit any needed decls for which code generation was deferred.
   void EmitDeferred();
+
+  void recordUniqueInternalLinkageTarget(GlobalDecl GD, StringRef OriginalName);
+  std::string resolveUniqueInternalLinkageReference(StringRef TargetName);
 
   llvm::GlobalValue *getOrCreateWeakRefTarget(const ValueDecl *VD,
                                               StringRef Name);

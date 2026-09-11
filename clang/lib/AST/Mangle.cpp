@@ -126,8 +126,9 @@ static CCMangling getCallingConvMangling(const ASTContext &Context,
   }
 }
 
-bool MangleContext::shouldMangleDeclName(const NamedDecl *D) {
-  const ASTContext &ASTContext = getASTContext();
+static bool shouldMangleDeclNameImpl(MangleContext &MC, const NamedDecl *D,
+                                     bool UseUniqueInternalLinkageNames) {
+  const ASTContext &ASTContext = MC.getASTContext();
 
   CCMangling CC = getCallingConvMangling(ASTContext, D);
   if (CC != CCM_Other)
@@ -140,12 +141,12 @@ bool MangleContext::shouldMangleDeclName(const NamedDecl *D) {
 
   // C functions with internal linkage have to be mangled with option
   // -funique-internal-linkage-names.
-  if (!getASTContext().getLangOpts().CPlusPlus &&
-      isUniqueInternalLinkageDecl(D))
+  if (UseUniqueInternalLinkageNames && !ASTContext.getLangOpts().CPlusPlus &&
+      MC.isUniqueInternalLinkageDecl(D))
     return true;
 
   // In C, functions with no attributes never need to be mangled. Fastpath them.
-  if (!getASTContext().getLangOpts().CPlusPlus && !D->hasAttrs())
+  if (!ASTContext.getLangOpts().CPlusPlus && !D->hasAttrs())
     return false;
 
   // Any decl can be declared with __asm("foo") on it, and this takes precedence
@@ -157,7 +158,18 @@ bool MangleContext::shouldMangleDeclName(const NamedDecl *D) {
   if (isa<MSGuidDecl>(D))
     return true;
 
-  return shouldMangleCXXName(D);
+  return MC.shouldMangleCXXName(D);
+}
+
+bool MangleContext::shouldMangleDeclName(const NamedDecl *D) {
+  return shouldMangleDeclNameImpl(*this, D,
+                                  /*UseUniqueInternalLinkageNames=*/true);
+}
+
+bool MangleContext::shouldMangleDeclNameWithoutUniqueInternalLinkageNames(
+    const NamedDecl *D) {
+  return shouldMangleDeclNameImpl(*this, D,
+                                  /*UseUniqueInternalLinkageNames=*/false);
 }
 
 namespace {

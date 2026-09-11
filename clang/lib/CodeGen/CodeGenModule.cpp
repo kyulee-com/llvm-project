@@ -1042,6 +1042,8 @@ void CodeGenModule::clear() {
   DeferredDeclsToEmit.clear();
   EmittedDeferredDecls.clear();
   DeferredAnnotations.clear();
+  UniqueInternalLinkageTargets.clear();
+  SuppressedUniqueInternalLinkageNames.clear();
   if (OpenMPRuntime)
     OpenMPRuntime->clear();
 }
@@ -2477,15 +2479,30 @@ static bool isUniqueInternalLinkageDecl(GlobalDecl GD,
          (CGM.getFunctionLinkage(GD) == llvm::GlobalValue::InternalLinkage);
 }
 
-static std::string getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD,
-                                      const NamedDecl *ND,
-                                      bool OmitMultiVersionMangling = false) {
+static bool
+canResolveUniqueInternalLinkageReferences(const CodeGenModule &CGM) {
+  const LangOptions &LangOpts = CGM.getLangOpts();
+  // Incremental modules, CUDA/HIP compilations, and OpenMP target-device
+  // compilation move or filter deferred state between CodeGenModules. Keep
+  // their existing behavior rather than carrying source-order-dependent
+  // reference state across those boundaries.
+  return !LangOpts.IncrementalExtensions && !LangOpts.CUDA &&
+         !LangOpts.OpenMPIsTargetDevice;
+}
+
+static std::string
+getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD, const NamedDecl *ND,
+                   bool OmitMultiVersionMangling = false,
+                   bool UseUniqueInternalLinkageNames = true) {
   SmallString<256> Buffer;
   llvm::raw_svector_ostream Out(Buffer);
   MangleContext &MC = CGM.getCXXABI().getMangleContext();
-  if (!CGM.getModuleNameHash().empty())
+  if (UseUniqueInternalLinkageNames && !CGM.getModuleNameHash().empty())
     MC.needsUniqueInternalLinkageNames();
-  bool ShouldMangle = MC.shouldMangleDeclName(ND);
+  bool ShouldMangle =
+      UseUniqueInternalLinkageNames
+          ? MC.shouldMangleDeclName(ND)
+          : MC.shouldMangleDeclNameWithoutUniqueInternalLinkageNames(ND);
   if (ShouldMangle)
     MC.mangleName(GD.getWithDecl(ND), Out);
   else {
@@ -2520,7 +2537,8 @@ static std::string getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD,
   // be properly demangled.  For example, for C functions without prototypes,
   // name mangling is not done and the unique suffix should not be appeneded
   // then.
-  if (ShouldMangle && isUniqueInternalLinkageDecl(GD, CGM)) {
+  if (UseUniqueInternalLinkageNames && ShouldMangle &&
+      isUniqueInternalLinkageDecl(GD, CGM)) {
     assert(CGM.getCodeGenOpts().UniqueInternalLinkageNames &&
            "Hash computed when not explicitly requested");
     Out << CGM.getModuleNameHash();
@@ -2572,6 +2590,47 @@ static std::string getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD,
     CGM.printPostfixForExternalizedDecl(Out, ND);
 
   return std::string(Out.str());
+}
+
+void CodeGenModule::recordUniqueInternalLinkageTarget(GlobalDecl GD,
+                                                      StringRef OriginalName) {
+  GlobalDecl CanonicalGD = GD.getCanonicalDecl();
+  auto [It, Inserted] = UniqueInternalLinkageTargets.try_emplace(
+      OriginalName, std::optional<GlobalDecl>(CanonicalGD));
+  if (Inserted || !It->second)
+    return;
+
+  if (It->second->getCanonicalDecl() != CanonicalGD)
+    It->second.reset();
+}
+
+std::string
+CodeGenModule::resolveUniqueInternalLinkageReference(StringRef TargetName) {
+  if (getModuleNameHash().empty() ||
+      !canResolveUniqueInternalLinkageReferences(*this))
+    return TargetName.str();
+
+  // A source or compiler-generated symbol with the requested assembler name is
+  // authoritative. A weakref placeholder is excluded because it does not
+  // establish the target's identity. Module-level assembly is opaque to
+  // CodeGen and cannot be considered here.
+  if (llvm::GlobalValue *ExactTarget = GetGlobalValue(TargetName);
+      ExactTarget && !WeakRefReferences.contains(ExactTarget))
+    return TargetName.str();
+
+  auto It = UniqueInternalLinkageTargets.find(TargetName);
+  if (It == UniqueInternalLinkageTargets.end()) {
+    // Aliases and ifuncs require a definition in this translation unit. If its
+    // name has not been computed yet, keep the definition's ordinary assembler
+    // name rather than changing a cached name retroactively.
+    SuppressedUniqueInternalLinkageNames.insert(TargetName);
+    return TargetName.str();
+  }
+
+  // Do not guess when distinct declarations share an ordinary assembler name.
+  if (!It->second)
+    return TargetName.str();
+  return getMangledName(*It->second).str();
 }
 
 void CodeGenModule::UpdateMultiVersionNames(GlobalDecl GD,
@@ -2645,7 +2704,19 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
 
   // Keep the first result in the case of a mangling collision.
   const auto *ND = cast<NamedDecl>(GD.getDecl());
-  std::string MangledName = getMangledNameImpl(*this, GD, ND);
+  std::string OriginalName;
+  bool UseUniqueInternalLinkageNames = true;
+  if (canResolveUniqueInternalLinkageReferences(*this) &&
+      isUniqueInternalLinkageDecl(GD, *this)) {
+    OriginalName =
+        getMangledNameImpl(*this, GD, ND, /*OmitMultiVersionMangling=*/false,
+                           /*UseUniqueInternalLinkageNames=*/false);
+    UseUniqueInternalLinkageNames =
+        !SuppressedUniqueInternalLinkageNames.contains(OriginalName);
+  }
+  std::string MangledName = UseUniqueInternalLinkageNames
+                                ? getMangledNameImpl(*this, GD, ND)
+                                : OriginalName;
 
   // Ensure either we have different ABIs between host and device compilations,
   // says host compilation following MSVC ABI but device compilation follows
@@ -2664,8 +2735,9 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
          getCUDARuntime().getDeviceSideName(ND) ==
              getMangledNameImpl(
                  *this,
-                 GD.getWithKernelReferenceKind(KernelReferenceKind::Kernel),
-                 ND));
+                 GD.getWithKernelReferenceKind(KernelReferenceKind::Kernel), ND,
+                 /*OmitMultiVersionMangling=*/false,
+                 UseUniqueInternalLinkageNames));
 
   // This invariant should hold true in the future.
   // Prior work:
@@ -2678,7 +2750,10 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
   //        "LLVM demangler must demangle clang-generated names");
 
   auto Result = Manglings.insert(std::make_pair(MangledName, GD));
-  return MangledDeclNames[CanonicalGD] = Result.first->first();
+  StringRef ResultName = MangledDeclNames[CanonicalGD] = Result.first->first();
+  if (!OriginalName.empty())
+    recordUniqueInternalLinkageTarget(GD, OriginalName);
+  return ResultName;
 }
 
 StringRef CodeGenModule::getBlockMangledName(GlobalDecl GD,
@@ -7187,8 +7262,12 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
   assert(AA && "Not an alias?");
 
   StringRef MangledName = getMangledName(GD);
+  std::string AliaseeName =
+      isa<FunctionDecl>(D)
+          ? resolveUniqueInternalLinkageReference(AA->getAliasee())
+          : AA->getAliasee().str();
 
-  if (AA->getAliasee() == MangledName) {
+  if (AliaseeName == MangledName) {
     Diags.Report(AA->getLocation(), diag::err_cyclic_alias) << 0;
     return;
   }
@@ -7208,7 +7287,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
   llvm::Constant *Aliasee;
   llvm::GlobalValue::LinkageTypes LT;
   if (isa<llvm::FunctionType>(DeclTy)) {
-    Aliasee = GetOrCreateLLVMFunction(AA->getAliasee(), DeclTy, GD,
+    Aliasee = GetOrCreateLLVMFunction(AliaseeName, DeclTy, GD,
                                       /*ForVTable=*/false);
     LT = getFunctionLinkage(GD);
   } else {
@@ -7275,8 +7354,10 @@ void CodeGenModule::emitIFuncDefinition(GlobalDecl GD) {
   assert(IFA && "Not an ifunc?");
 
   StringRef MangledName = getMangledName(GD);
+  std::string ResolverName =
+      resolveUniqueInternalLinkageReference(IFA->getResolver());
 
-  if (IFA->getResolver() == MangledName) {
+  if (ResolverName == MangledName) {
     Diags.Report(IFA->getLocation(), diag::err_cyclic_alias) << 1;
     return;
   }
@@ -7301,9 +7382,8 @@ void CodeGenModule::emitIFuncDefinition(GlobalDecl GD) {
   // indicate IsIncompleteFunction. Either the type is ignored (if the resolver
   // was emitted) or the whole function will be replaced (if the resolver has
   // not been emitted).
-  llvm::Constant *Resolver =
-      GetOrCreateLLVMFunction(IFA->getResolver(), VoidTy, {},
-                              /*ForVTable=*/false);
+  llvm::Constant *Resolver = GetOrCreateLLVMFunction(ResolverName, VoidTy, {},
+                                                     /*ForVTable=*/false);
   llvm::Type *DeclTy = getTypes().ConvertTypeForMem(D->getType());
   unsigned AS = getTypes().getTargetAddressSpace(D->getType());
   llvm::GlobalIFunc *GIF = llvm::GlobalIFunc::create(

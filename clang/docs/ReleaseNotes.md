@@ -261,6 +261,12 @@ features cannot lower the translation-unit ABI level;
 
 - All options of the `-fzero-call-used-regs` compiler flag are now allowed on RISC-V.
 
+- In regular host compilation, `-funique-internal-linkage-names` now preserves
+  GNU `alias` and `ifunc` references to internal functions on a best-effort
+  basis. If a target has already received a unique name, Clang uses that name
+  for the reference. If the reference is seen first, the target keeps its
+  ordinary assembler name.
+
 ### Removed Compiler Flags
 
 ### Attribute Changes in Clang

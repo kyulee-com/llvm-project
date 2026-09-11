@@ -126,6 +126,10 @@ public:
   /// @{
 
   bool shouldMangleDeclName(const NamedDecl *D);
+  /// Determine whether \p D's name would be mangled without forcing mangling
+  /// for -funique-internal-linkage-names.
+  bool shouldMangleDeclNameWithoutUniqueInternalLinkageNames(
+      const NamedDecl *D);
   virtual bool shouldMangleCXXName(const NamedDecl *D) = 0;
   virtual bool shouldMangleStringLiteral(const StringLiteral *SL) = 0;
 
