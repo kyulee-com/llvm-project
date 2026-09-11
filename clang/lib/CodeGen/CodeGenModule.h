@@ -2090,6 +2090,9 @@ private:
   /// Emit any needed decls for which code generation was deferred.
   void EmitDeferred();
 
+  llvm::GlobalValue *getOrCreateWeakRefTarget(const ValueDecl *VD,
+                                              StringRef Name);
+
   /// Try to emit external vtables as available_externally if they have emitted
   /// all inlined virtual functions.  It runs after EmitDeferred() and therefore
   /// is not allowed to create new references to things that need to be emitted

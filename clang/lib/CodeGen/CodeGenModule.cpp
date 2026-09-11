@@ -4602,32 +4602,57 @@ ConstantAddress CodeGenModule::GetAddrOfTemplateParamObject(
   return ConstantAddress(GV, Type, Alignment);
 }
 
+llvm::GlobalValue *CodeGenModule::getOrCreateWeakRefTarget(const ValueDecl *VD,
+                                                           StringRef Name) {
+  llvm::Type *DeclTy = getTypes().ConvertTypeForMem(VD->getType());
+
+  // See if there is already something with the requested name in the module.
+  llvm::GlobalValue *Entry = GetGlobalValue(Name);
+  if (Entry)
+    return Entry;
+
+  llvm::GlobalValue *Target;
+  if (isa<llvm::FunctionType>(DeclTy)) {
+    Target = cast<llvm::GlobalValue>(GetOrCreateLLVMFunction(
+        Name, DeclTy, GlobalDecl(cast<FunctionDecl>(VD)),
+        /*ForVTable=*/false));
+  } else {
+    const auto *Var = cast<VarDecl>(VD);
+    unsigned TargetAS =
+        getContext().getTargetAddressSpace(GetGlobalVarAddressSpace(Var));
+    auto *GV = new llvm::GlobalVariable(
+        getModule(), DeclTy, /*isConstant=*/false,
+        llvm::GlobalValue::ExternalWeakLinkage, /*Initializer=*/nullptr, Name,
+        /*InsertBefore=*/nullptr, llvm::GlobalVariable::NotThreadLocal,
+        TargetAS);
+    if (Var->getTLSKind())
+      setTLSMode(GV, *Var);
+    Target = GV;
+
+    // A weakref declaration describes the type, address space, and TLS mode of
+    // the reference. Do not copy its linkage, visibility, section, alignment,
+    // or other declaration properties to a target that has no declaration of
+    // its own. Match GetOrCreateLLVMGlobal's deferred-definition activation.
+    auto Deferred = DeferredDecls.find(Name);
+    if (Deferred != DeferredDecls.end()) {
+      addDeferredDeclToEmit(Deferred->second);
+      DeferredDecls.erase(Deferred);
+    }
+  }
+
+  Target->setLinkage(llvm::GlobalValue::ExternalWeakLinkage);
+  WeakRefReferences.insert(Target);
+  return Target;
+}
+
 ConstantAddress CodeGenModule::GetWeakRefReference(const ValueDecl *VD) {
   const AliasAttr *AA = VD->getAttr<AliasAttr>();
   assert(AA && "No alias?");
 
   CharUnits Alignment = getContext().getDeclAlign(VD);
   llvm::Type *DeclTy = getTypes().ConvertTypeForMem(VD->getType());
-
-  // See if there is already something with the target's name in the module.
-  llvm::GlobalValue *Entry = GetGlobalValue(AA->getAliasee());
-  if (Entry)
-    return ConstantAddress(Entry, DeclTy, Alignment);
-
-  llvm::Constant *Aliasee;
-  if (isa<llvm::FunctionType>(DeclTy))
-    Aliasee = GetOrCreateLLVMFunction(AA->getAliasee(), DeclTy,
-                                      GlobalDecl(cast<FunctionDecl>(VD)),
-                                      /*ForVTable=*/false);
-  else
-    Aliasee = GetOrCreateLLVMGlobal(AA->getAliasee(), DeclTy, LangAS::Default,
-                                    nullptr);
-
-  auto *F = cast<llvm::GlobalValue>(Aliasee);
-  F->setLinkage(llvm::Function::ExternalWeakLinkage);
-  WeakRefReferences.insert(F);
-
-  return ConstantAddress(Aliasee, DeclTy, Alignment);
+  return ConstantAddress(getOrCreateWeakRefTarget(VD, AA->getAliasee()),
+                         DeclTy, Alignment);
 }
 
 template <typename AttrT> static bool hasImplicitAttr(const ValueDecl *D) {
@@ -7215,6 +7240,7 @@ void CodeGenModule::EmitAliasDefinition(GlobalDecl GD) {
     GA->takeName(Entry);
 
     Entry->replaceAllUsesWith(GA);
+    WeakRefReferences.erase(Entry);
     Entry->eraseFromParent();
   } else {
     GA->setName(MangledName);
@@ -7296,6 +7322,7 @@ void CodeGenModule::emitIFuncDefinition(GlobalDecl GD) {
     GIF->takeName(Entry);
 
     Entry->replaceAllUsesWith(GIF);
+    WeakRefReferences.erase(Entry);
     Entry->eraseFromParent();
   } else
     GIF->setName(MangledName);
