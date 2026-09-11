@@ -6,8 +6,23 @@
 // RUN: %clang_cc1 -triple aarch64-pc-windows-msvcu -verify -emit-llvm-only %s
 // RUN: %clang_cc1 -triple powerpc64-ibm-aix-xcoff -verify -emit-llvm-only %s
 // RUN: %clang_cc1 -triple powerpc64-ibm-aix-xcoff -verify -emit-llvm-only -DCHECK_ALIASES %s
+// RUN: %clang_cc1 -triple x86_64-linux -emit-llvm -o - \
+// RUN:   -DIFUNC_ALIAS_RESOLVER %s | FileCheck %s --check-prefix=ALIAS-RESOLVER
 
-#if defined(_WIN32) && !defined(__aarch64__)
+#if defined(IFUNC_ALIAS_RESOLVER)
+
+static void implementation(void) {}
+static void (*resolver_implementation(void))(void) { return implementation; }
+static void (*resolver_alias(void))(void)
+    __attribute__((alias("resolver_implementation")));
+void dispatched(void) __attribute__((ifunc("resolver_alias")));
+
+// ALIAS-RESOLVER: @resolver_alias = internal alias ptr (), ptr @resolver_implementation
+// ALIAS-RESOLVER: @dispatched = ifunc void (), ptr @resolver_alias
+// ALIAS-RESOLVER: define internal ptr @resolver_implementation() #[[ATTR:[0-9]+]]
+// ALIAS-RESOLVER: attributes #[[ATTR]] = {{.*}}disable_sanitizer_instrumentation
+
+#elif defined(_WIN32) && !defined(__aarch64__)
 void foo(void) {}
 void bar(void) __attribute__((ifunc("foo")));
 // expected-warning@-1 {{unknown attribute 'ifunc' ignored}}

@@ -1024,8 +1024,8 @@ void CodeGenModule::checkAliases() {
     // ifunc resolvers are usually implemented to run before sanitizer
     // initialization. Disable instrumentation to prevent the ordering issue.
     if (IsIFunc)
-      cast<llvm::Function>(Aliasee)->addFnAttr(
-          llvm::Attribute::DisableSanitizerInstrumentation);
+      cast<llvm::Function>(const_cast<llvm::GlobalValue *>(GV))
+          ->addFnAttr(llvm::Attribute::DisableSanitizerInstrumentation);
   }
   if (!Error)
     return;
