@@ -844,15 +844,19 @@ ConcatInputSection *ObjCSelRefsHelper::makeSelRef(StringRef methname) {
 
   size_t wordSize = target->wordSize;
   uint8_t *selrefData = bAlloc().Allocate<uint8_t>(wordSize);
-  write64le(selrefData, methnameOffset);
+  if (wordSize == 8)
+    write64le(selrefData, methnameOffset);
+  else
+    write32le(selrefData, methnameOffset);
   ConcatInputSection *objcSelref =
       makeSyntheticInputSection(segment_names::data, section_names::objcSelrefs,
                                 S_LITERAL_POINTERS | S_ATTR_NO_DEAD_STRIP,
                                 ArrayRef<uint8_t>{selrefData, wordSize},
                                 /*align=*/wordSize);
   assert(objcSelref->live);
+  uint8_t relocLength = wordSize == 8 ? 3 : 2;
   objcSelref->relocs.push_back({/*type=*/target->unsignedRelocType,
-                                /*pcrel=*/false, /*length=*/3,
+                                /*pcrel=*/false, /*length=*/relocLength,
                                 /*offset=*/0,
                                 /*addend=*/static_cast<int64_t>(methnameOffset),
                                 /*referent=*/in.objcMethnameSection->isec});
@@ -2075,6 +2079,11 @@ ObjCMethListSection::ObjCMethListSection()
 // create them early on here to ensure they are processed correctly by the lld
 // pipeline.
 void ObjCMethListSection::setUp() {
+  // Dead stripping and category merging can remove lists after collection.
+  // Discard them before creating selector references or encoding the lists.
+  llvm::erase_if(inputs, [](const ConcatInputSection *isec) {
+    return isec->shouldOmitFromOutput();
+  });
   for (const ConcatInputSection *isec : inputs) {
     uint32_t structSizeAndFlags = 0, structCount = 0;
     readMethodListHeader(isec->data.data(), structSizeAndFlags, structCount);
@@ -2153,15 +2162,21 @@ void ObjCMethListSection::writeTo(uint8_t *bufStart) const {
 // InputSection for any symbols whose names match the patterns we expect Clang
 // and Swift to generate for method lists.
 bool ObjCMethListSection::isMethodList(const ConcatInputSection *isec) {
+  // The protocol prefixes also match the optional method lists, which have an
+  // additional "OPT_" component after the prefix.
   const char *symPrefixes[] = {
       objc::symbol_names::classMethods,
       objc::symbol_names::instanceMethods,
       objc::symbol_names::categoryInstanceMethods,
       objc::symbol_names::categoryClassMethods,
+      objc::symbol_names::protocolInstanceMethods,
+      objc::symbol_names::protocolClassMethods,
       objc::symbol_names::swiftInstanceMethods,
       objc::symbol_names::swiftClassMethods,
       objc::symbol_names::swiftCategoryInstanceMethods,
-      objc::symbol_names::swiftCategoryClassMethods};
+      objc::symbol_names::swiftCategoryClassMethods,
+      objc::symbol_names::swiftProtocolInstanceMethods,
+      objc::symbol_names::swiftProtocolClassMethods};
   if (!isec)
     return false;
   for (const Symbol *sym : isec->symbols) {
@@ -2256,8 +2271,19 @@ ObjCMethListSection::writeRelativeMethodList(const ConcatInputSection *isec,
     writeRelativeOffsetForIsec(isec, buf, inSecOff, outSecOff, true);
     // Write the type of the method
     writeRelativeOffsetForIsec(isec, buf, inSecOff, outSecOff, false);
-    // Write reference to the selector of the method
-    writeRelativeOffsetForIsec(isec, buf, inSecOff, outSecOff, false);
+    // Protocol requirements have a null implementation pointer and no
+    // relocation in this slot. Preserve a zero word instead of trying to
+    // resolve it as a relative offset.
+    const uint8_t *imp = isec->data.data() + inSecOff;
+    bool nullImp = !isec->getRelocAt(inSecOff) &&
+                   (target->wordSize == 8 ? read64le(imp) : read32le(imp)) == 0;
+    if (nullImp) {
+      write32le(buf + outSecOff, 0);
+      inSecOff += target->wordSize;
+      outSecOff += relativeOffsetSize;
+    } else {
+      writeRelativeOffsetForIsec(isec, buf, inSecOff, outSecOff, false);
+    }
   }
 
   // Expecting to have read all the data in the isec

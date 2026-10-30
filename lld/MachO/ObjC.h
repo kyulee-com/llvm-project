@@ -32,12 +32,18 @@ constexpr const char categoryInstanceMethods[] =
 constexpr const char categoryClassMethods[] =
     "__OBJC_$_CATEGORY_CLASS_METHODS_";
 constexpr const char categoryProtocols[] = "__OBJC_CATEGORY_PROTOCOLS_$_";
+constexpr const char protocolInstanceMethods[] =
+    "__OBJC_$_PROTOCOL_INSTANCE_METHODS_";
+constexpr const char protocolClassMethods[] = "__OBJC_$_PROTOCOL_CLASS_METHODS_";
 
 constexpr const char swiftInstanceMethods[] = "__INSTANCE_METHODS_";
 constexpr const char swiftClassMethods[] = "__CLASS_METHODS_";
 constexpr const char swiftCategoryInstanceMethods[] =
     "__CATEGORY_INSTANCE_METHODS_";
 constexpr const char swiftCategoryClassMethods[] = "__CATEGORY_CLASS_METHODS_";
+constexpr const char swiftProtocolInstanceMethods[] =
+    "__PROTOCOL_INSTANCE_METHODS_";
+constexpr const char swiftProtocolClassMethods[] = "__PROTOCOL_CLASS_METHODS_";
 } // namespace symbol_names
 
 // Check for duplicate method names within related categories / classes.
