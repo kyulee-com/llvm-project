@@ -22,11 +22,11 @@
 ; CHECK-MERGE-NEXT:                ivarLayout 0x0
 ; CHECK-MERGE-NEXT:                      name 0x[[#%x,]] _TtC11MyTestClass11MyTestClass
 ; CHECK-MERGE-NEXT:               baseMethods 0x[[#%x,]] (struct method_list_t *)
-; CHECK-MERGE-NEXT: 		   entsize 24
+; CHECK-MERGE-NEXT: 		   entsize 12 (relative)
 ; CHECK-MERGE-NEXT: 		     count 1
-; CHECK-MERGE-NEXT: 		      name 0x[[#%x,]] init
-; CHECK-MERGE-NEXT: 		     types 0x[[#%x,]] @16@0:8
-; CHECK-MERGE-NEXT: 		       imp _$s11MyTestClassAACABycfcTo
+; CHECK-MERGE-NEXT: 		      name 0x[[#%x,]] (0x[[#%x,]]) init
+; CHECK-MERGE-NEXT: 		     types 0x[[#%x,]] (0x[[#%x,]]) @16@0:8
+; CHECK-MERGE-NEXT: 		       imp 0x[[#%x,]] (0x[[#%x,]]) _$s11MyTestClassAACABycfcTo
 ; CHECK-MERGE-NEXT:             baseProtocols 0x0
 ; CHECK-MERGE-NEXT:                     ivars 0x0
 ; CHECK-MERGE-NEXT:            weakIvarLayout 0x0
