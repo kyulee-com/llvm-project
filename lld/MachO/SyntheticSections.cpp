@@ -844,7 +844,7 @@ ConcatInputSection *ObjCSelRefsHelper::makeSelRef(StringRef methname) {
 
   size_t wordSize = target->wordSize;
   uint8_t *selrefData = bAlloc().Allocate<uint8_t>(wordSize);
-  write64le(selrefData, methnameOffset);
+  writeAddress(selrefData, methnameOffset, target->p2WordSize);
   ConcatInputSection *objcSelref =
       makeSyntheticInputSection(segment_names::data, section_names::objcSelrefs,
                                 S_LITERAL_POINTERS | S_ATTR_NO_DEAD_STRIP,
@@ -852,7 +852,8 @@ ConcatInputSection *ObjCSelRefsHelper::makeSelRef(StringRef methname) {
                                 /*align=*/wordSize);
   assert(objcSelref->live);
   objcSelref->relocs.push_back({/*type=*/target->unsignedRelocType,
-                                /*pcrel=*/false, /*length=*/3,
+                                /*pcrel=*/false,
+                                /*length=*/target->p2WordSize,
                                 /*offset=*/0,
                                 /*addend=*/static_cast<int64_t>(methnameOffset),
                                 /*referent=*/in.objcMethnameSection->isec});
