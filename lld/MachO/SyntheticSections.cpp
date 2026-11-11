@@ -390,7 +390,8 @@ void GotSection::writeTo(uint8_t *buf) const {
   } else {
     for (const auto &[i, entry] : llvm::enumerate(entries))
       if (auto *defined = dyn_cast<Defined>(entry))
-        write64le(&buf[i * target->wordSize], defined->getVA());
+        writeAddress(&buf[i * target->wordSize], defined->getVA(),
+                     target->p2WordSize);
   }
 }
 
@@ -987,10 +988,11 @@ void LazyPointerSection::writeTo(uint8_t *buf) const {
         uint64_t stubHelperOffset =
             target->stubHelperHeaderSize +
             dysym->stubsHelperIndex * target->stubHelperEntrySize;
-        write64le(buf + off, in.stubHelper->addr + stubHelperOffset);
+        writeAddress(buf + off, in.stubHelper->addr + stubHelperOffset,
+                     target->p2WordSize);
       }
     } else {
-      write64le(buf + off, sym->getVA());
+      writeAddress(buf + off, sym->getVA(), target->p2WordSize);
     }
     off += target->wordSize;
   }
