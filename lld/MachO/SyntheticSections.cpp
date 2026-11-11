@@ -2262,7 +2262,20 @@ ObjCMethListSection::writeRelativeMethodList(const ConcatInputSection *isec,
     writeRelativeOffsetForIsec(isec, buf, inSecOff, outSecOff, true);
     // Write the type of the method
     writeRelativeOffsetForIsec(isec, buf, inSecOff, outSecOff, false);
-    // Write reference to the selector of the method
+    // Protocol method descriptions have no IMP: encode it as a zero offset,
+    // which the runtime treats as null. Metadata discovery only accepts a
+    // missing IMP relocation for protocol lists, over zero bytes.
+    if (!isec->getRelocAt(inSecOff)) {
+      assert(config->enableObjCProtocolRelativeMethodLists &&
+             llvm::all_of(isec->data.slice(inSecOff, target->wordSize),
+                          [](uint8_t b) { return b == 0; }) &&
+             "Expected a null protocol IMP in ObjC method list");
+      write32le(buf + outSecOff, 0);
+      inSecOff += target->wordSize;
+      outSecOff += relativeOffsetSize;
+      continue;
+    }
+    // Write the implementation offset.
     writeRelativeOffsetForIsec(isec, buf, inSecOff, outSecOff, false);
   }
 

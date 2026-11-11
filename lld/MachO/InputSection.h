@@ -367,6 +367,7 @@ constexpr const char objcProtoList[] = "__objc_protolist";
 constexpr const char objcCatList2[] = "__objc_catlist2";
 constexpr const char objcClassROList[] = "__objc_clsrolist";
 constexpr const char objcData[] = "__objc_data";
+constexpr const char objcProtoRefs[] = "__objc_protorefs";
 constexpr const char outlinedHashTree[] = "__llvm_outline";
 constexpr const char pageZero[] = "__pagezero";
 constexpr const char pointers[] = "__pointers";

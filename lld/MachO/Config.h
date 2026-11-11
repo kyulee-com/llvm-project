@@ -140,6 +140,7 @@ struct Configuration {
   bool emitChainedFixups = false;
   bool emitRelativeMethodLists = false;
   bool objcMethodListMetadataDiscovery = false;
+  bool enableObjCProtocolRelativeMethodLists = false;
   bool thinLTOEmitImportsFiles;
   bool thinLTOEmitIndexFiles;
   bool thinLTOIndexOnly;

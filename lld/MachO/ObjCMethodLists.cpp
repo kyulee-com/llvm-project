@@ -9,9 +9,9 @@
 // Discover Objective-C method lists for relative encoding by following the
 // references in ObjC metadata, instead of matching compiler-private symbol
 // names. A method list is converted only if it is reachable from a class,
-// metaclass, category or class_ro_t root, has the exact layout of an absolute
-// method_list_t, and occupies a whole input section that nothing else
-// references at an interior offset. Anything else stays absolute.
+// metaclass, category, class_ro_t or (opt-in) protocol root, has the exact
+// layout of an absolute method_list_t, and occupies a whole input section that
+// nothing else references at an interior offset. Anything else stays absolute.
 //
 //===----------------------------------------------------------------------===//
 
@@ -50,8 +50,10 @@ private:
   void visitClass(Ref cls);
   void visitClassRO(Ref ro);
   void visitCategory(Ref cat, bool followClass);
-  void addCandidate(Ref list);
-  bool isEligible(const ConcatInputSection *isec) const;
+  void visitProtocol(Ref proto);
+  void visitProtocolList(Ref list);
+  void addCandidate(Ref list, bool isProtocol = false);
+  bool isEligible(const ConcatInputSection *isec, bool isProtocol) const;
   void dropInteriorReferences();
   void moveToMethListSection();
 
@@ -142,6 +144,7 @@ void MethodListCollector::visitClassRO(Ref ro) {
   // ivarLayout, name, baseMethods, ...
   uint64_t header = wordSize == 8 ? 16 : 12;
   addCandidate(follow(ro, header + 2 * wordSize));
+  visitProtocolList(follow(ro, header + 3 * wordSize));
 }
 
 void MethodListCollector::visitCategory(Ref cat, bool followClass) {
@@ -150,18 +153,46 @@ void MethodListCollector::visitCategory(Ref cat, bool followClass) {
   // category_t: name, cls, instanceMethods, classMethods, protocols, ...
   addCandidate(follow(cat, 2 * wordSize));
   addCandidate(follow(cat, 3 * wordSize));
+  visitProtocolList(follow(cat, 4 * wordSize));
   // __objc_catlist2 categories point at a Swift class stub, not a class_t.
   if (followClass)
     visitClass(follow(cat, wordSize));
 }
 
-void MethodListCollector::addCandidate(Ref list) {
+void MethodListCollector::visitProtocol(Ref proto) {
+  if (!config->enableObjCProtocolRelativeMethodLists || !proto.first ||
+      !visited.insert(proto).second)
+    return;
+  // protocol_t: isa, name, protocols, instanceMethods, classMethods,
+  // optionalInstanceMethods, optionalClassMethods, ...
+  visitProtocolList(follow(proto, 2 * wordSize));
+  for (uint64_t field = 3; field != 7; ++field)
+    addCandidate(follow(proto, field * wordSize), /*isProtocol=*/true);
+}
+
+void MethodListCollector::visitProtocolList(Ref list) {
+  auto [isec, offset] = list;
+  if (!config->enableObjCProtocolRelativeMethodLists || !isec ||
+      !visited.insert(list).second || !isec->data.data() ||
+      offset + wordSize > isec->data.size())
+    return;
+  // protocol_list_t: count, protocol_t *list[count].
+  uint64_t count = wordSize == 8 ? read64le(isec->data.data() + offset)
+                                 : read32le(isec->data.data() + offset);
+  if (count > (isec->data.size() - offset - wordSize) / wordSize)
+    return;
+  for (uint64_t i = 1; i <= count; ++i)
+    visitProtocol(follow(list, i * wordSize));
+}
+
+void MethodListCollector::addCandidate(Ref list, bool isProtocol) {
   // Only whole sections are converted; an embedded list stays absolute.
-  if (list.first && list.second == 0 && isEligible(list.first))
+  if (list.first && list.second == 0 && isEligible(list.first, isProtocol))
     lists.insert(list.first);
 }
 
-bool MethodListCollector::isEligible(const ConcatInputSection *isec) const {
+bool MethodListCollector::isEligible(const ConcatInputSection *isec,
+                                     bool isProtocol) const {
   if (lists.contains(const_cast<ConcatInputSection *>(isec)))
     return false;
   StringRef name = isec->getName();
@@ -205,8 +236,14 @@ bool MethodListCollector::isEligible(const ConcatInputSection *isec) const {
     if (!isPlainPointer(types) ||
         !isa_and_nonnull<CStringInputSection>(targetOf(*types).first))
       return false;
-    // IMP.
-    if (!isPlainPointer(relocAt(isec, entry + 2 * wordSize)))
+    // IMP. Protocol method descriptions have a null IMP, which the encoder
+    // writes as a zero relative offset.
+    const Relocation *imp = relocAt(isec, entry + 2 * wordSize);
+    if (isProtocol && !imp &&
+        llvm::all_of(isec->data.slice(entry + 2 * wordSize, wordSize),
+                     [](uint8_t b) { return b == 0; }))
+      continue;
+    if (!isPlainPointer(imp))
       return false;
   }
   return true;
@@ -261,6 +298,9 @@ void MethodListCollector::run() {
       category = true;
     else if (name == section_names::objcCatList2)
       category = true, followClass = false;
+    else if (name == section_names::objcProtoList ||
+             name == section_names::objcProtoRefs)
+      visit = &MethodListCollector::visitProtocol;
     else
       continue;
     for (uint64_t off = 0; off + wordSize <= isec->data.size();

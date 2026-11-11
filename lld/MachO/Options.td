@@ -1392,6 +1392,11 @@ def objc_method_list_metadata_discovery
       HelpText<"Find method lists to encode as relative by following ObjC "
                "metadata instead of symbol names (experimental)">,
       Group<grp_undocumented>;
+def enable_objc_protocol_relative_method_lists
+    : Flag<["--"], "enable-objc-protocol-relative-method-lists">,
+      HelpText<"Also encode ObjC protocol method lists as relative (with "
+               "--objc-method-list-metadata-discovery)">,
+      Group<grp_undocumented>;
 def flto_codegen_only : Flag<["-"], "flto-codegen-only">,
     HelpText<"This option is undocumented in ld64">,
     Flags<[HelpHidden]>,
