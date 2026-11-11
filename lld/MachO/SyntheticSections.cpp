@@ -2210,10 +2210,11 @@ void ObjCMethListSection::writeRelativeOffsetForIsec(
   } else if (auto *sym = dyn_cast<Symbol *>(reloc->referent)) {
     auto *def = dyn_cast_or_null<Defined>(sym);
     assert(def && "Expected all syms in __objc_methlist to be defined");
-    symVA = def->getVA();
+    symVA = def->getVA() + reloc->getAddend();
   } else {
+    // A section referent may have been folded by ICF; use the survivor.
     auto *isec = cast<InputSection *>(reloc->referent);
-    symVA = isec->getVA(reloc->getAddend());
+    symVA = isec->canonical()->getVA(reloc->getAddend());
   }
 
   uint32_t currentVA = isec->getVA() + outSecOff;
