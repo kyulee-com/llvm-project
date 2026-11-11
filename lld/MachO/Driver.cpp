@@ -2031,6 +2031,8 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
   config->emitInitOffsets =
       config->emitChainedFixups || args.hasArg(OPT_init_offsets);
   config->emitRelativeMethodLists = shouldEmitRelativeMethodLists(args);
+  config->objcMethodListMetadataDiscovery =
+      args.hasArg(OPT_objc_method_list_metadata_discovery);
   config->icfLevel = getICFLevel(args);
   config->keepICFStabs = args.hasArg(OPT_keep_icf_stabs);
   config->dedupStrings =
@@ -2521,6 +2523,10 @@ bool link(ArrayRef<const char *> argsArr, llvm::raw_ostream &stdoutOS,
     if (args.hasFlag(OPT_objc_category_merging, OPT_no_objc_category_merging,
                      false))
       objc::mergeCategories();
+
+    // After liveness and category merging (which synthesizes method lists),
+    // before literal folding and layout.
+    objc::collectMethodLists();
 
     computeColdness();
 

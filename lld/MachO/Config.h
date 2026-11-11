@@ -139,6 +139,7 @@ struct Configuration {
   bool emitInitOffsets = false;
   bool emitChainedFixups = false;
   bool emitRelativeMethodLists = false;
+  bool objcMethodListMetadataDiscovery = false;
   bool thinLTOEmitImportsFiles;
   bool thinLTOEmitIndexFiles;
   bool thinLTOIndexOnly;

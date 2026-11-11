@@ -44,6 +44,8 @@ constexpr const char swiftCategoryClassMethods[] = "__CATEGORY_CLASS_METHODS_";
 // Check for duplicate method names within related categories / classes.
 void checkCategories();
 void mergeCategories();
+// Find method lists for relative encoding by walking ObjC metadata.
+void collectMethodLists();
 
 void doCleanup();
 } // namespace objc

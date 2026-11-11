@@ -1387,6 +1387,11 @@ def objc_relative_method_lists : Flag<["-"], "objc_relative_method_lists">,
 def no_objc_relative_method_lists : Flag<["-"], "no_objc_relative_method_lists">,
     HelpText<"Don't emit relative method lists (use traditional representation)">,
     Group<grp_undocumented>;
+def objc_method_list_metadata_discovery
+    : Flag<["--"], "objc-method-list-metadata-discovery">,
+      HelpText<"Find method lists to encode as relative by following ObjC "
+               "metadata instead of symbol names (experimental)">,
+      Group<grp_undocumented>;
 def flto_codegen_only : Flag<["-"], "flto-codegen-only">,
     HelpText<"This option is undocumented in ld64">,
     Flags<[HelpHidden]>,
