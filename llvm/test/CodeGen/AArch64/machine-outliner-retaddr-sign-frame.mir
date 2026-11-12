@@ -1,0 +1,79 @@
+# RUN: sed 's/"sign-return-address"="non-leaf" "sign-return-address-key"="b_key"/"ptrauth-returns"/' %s | llc -mtriple=arm64e-apple-macosx -x=mir -run-pass=prolog-epilog,machine-outliner,aarch64-ptrauth -o - | FileCheck %s --check-prefixes=MACHO,FRAME
+# RUN: sed 's/"sign-return-address"="non-leaf" "sign-return-address-key"="b_key"/"ptrauth-returns"/' %s | llc -mtriple=arm64e-apple-macosx -aarch64-outliner-compact-unwind-frame=false -x=mir -run-pass=prolog-epilog,machine-outliner,aarch64-ptrauth -o - | FileCheck %s --check-prefixes=MACHO,NOFRAME
+# RUN: llc -mtriple=aarch64 -x=mir -run-pass=prolog-epilog,machine-outliner,aarch64-ptrauth %s -o - | FileCheck %s --check-prefixes=ELF,NOFRAME
+
+# A call-containing outlined function signs LR before saving it, including the
+# compact-unwind frame-record variant. Its CFI describes the signed return
+# address and the correct save slots.
+
+--- |
+  define void @callee() #0 { ret void }
+  define void @caller() #0 { ret void }
+  attributes #0 = { minsize noredzone uwtable "sign-return-address"="non-leaf" "sign-return-address-key"="b_key" }
+...
+---
+name: caller
+body: |
+  bb.0:
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    $w0 = ORRWri $wzr, 6
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    $w0 = ORRWri $wzr, 5
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    $w0 = ORRWri $wzr, 4
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    $w0 = ORRWri $wzr, 3
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    $w0 = ORRWri $wzr, 2
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    BL @callee, implicit-def dead $lr, implicit $sp
+    $w17 = ORRWri $wzr, 1
+    $w0 = ORRWri $wzr, 1
+    RET undef $lr
+...
+---
+name: callee
+body: |
+  bb.0:
+    RET undef $lr
+...
+
+# MACHO-LABEL: name: {{ *}}OUTLINED_FUNCTION_0
+# MACHO: frame-setup PACIBSP
+# MACHO-NOT: negate_ra_sign_state
+# FRAME-NEXT: early-clobber $sp = STPXpre $fp, $lr, $sp, -2
+# FRAME-NEXT: $fp = ADDXri $sp, 0, 0
+# FRAME-NEXT: frame-setup CFI_INSTRUCTION def_cfa $w29, 16
+# FRAME-NEXT: frame-setup CFI_INSTRUCTION offset $w30, -8
+# FRAME-NEXT: frame-setup CFI_INSTRUCTION offset $w29, -16
+# FRAME: early-clobber $sp, $fp, $lr = LDPXpost $sp, 2
+# FRAME-NEXT: RETAB
+
+# ELF-LABEL: name: {{ *}}OUTLINED_FUNCTION_0
+# ELF: frame-setup EMITBKEY
+# ELF-NEXT: frame-setup PACIBSP
+# ELF-NEXT: frame-setup CFI_INSTRUCTION negate_ra_sign_state
+# The LR-only CFI placement below is existing behavior. It describes the body
+# slots but is one instruction early at the STR; async-unwind cleanup is separate.
+# NOFRAME: frame-setup CFI_INSTRUCTION def_cfa_offset 16
+# NOFRAME-NEXT: frame-setup CFI_INSTRUCTION offset $w30, -16
+# NOFRAME-NEXT: early-clobber $sp = STRXpre $lr, $sp, -16
+# NOFRAME: early-clobber $sp, $lr = LDRXpost $sp, 16
+# NOFRAME-NEXT: frame-destroy {{(RETAB|AUTIBSP)}}
+# ELF-NEXT: RET $lr

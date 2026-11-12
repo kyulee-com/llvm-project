@@ -1,0 +1,177 @@
+# RUN: sed 's/"sign-return-address"="non-leaf"/"ptrauth-returns"/' %s | llc -mtriple=arm64e-apple-macosx -x=mir -run-pass=machine-outliner -o - | FileCheck %s --check-prefix=SIGNED
+# RUN: llc -mtriple=aarch64 -x=mir -run-pass=machine-outliner %s -o - | FileCheck %s --check-prefix=SIGNED
+# RUN: sed 's/"sign-return-address"="non-leaf"/"sign-return-address"="all"/' %s | llc -mtriple=aarch64 -x=mir -run-pass=machine-outliner -o - | FileCheck %s --check-prefix=SIGNED
+# RUN: sed 's/"sign-return-address"="non-leaf"//' %s | llc -mtriple=aarch64 -x=mir -run-pass=machine-outliner -o - | FileCheck %s --check-prefix=UNSIGNED
+
+# Leaf callers have an unsigned LR under non-leaf signing. If no register is
+# available, do not introduce an LR stack spill around the outlined call.
+# Check both default-call selection paths: a sequence that does not use SP,
+# and a sequence that would require stack fixups. Keep register saves and calls
+# with a dead LR available, even when most candidates require a stack save.
+
+--- |
+  define void @no_sp() #0 { ret void }
+  define void @uses_sp() #0 { ret void }
+  define void @reg_save() #0 { ret void }
+  define void @no_lr_save() #0 { ret void }
+  attributes #0 = { minsize noredzone "sign-return-address"="non-leaf" }
+...
+---
+name: no_sp
+body: |
+  bb.0:
+    liveins: $lr, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $x0 = ADDXri $x0, 1, 0
+    $x0 = ADDXri $x0, 2, 0
+    $x0 = ADDXri $x0, 3, 0
+    $x0 = ADDXri $x0, 4, 0
+    $x0 = ADDXri $x0, 5, 0
+    $x0 = ADDXri $x0, 6, 0
+  bb.1:
+    liveins: $lr, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $x0 = ADDXri $x0, 1, 0
+    $x0 = ADDXri $x0, 2, 0
+    $x0 = ADDXri $x0, 3, 0
+    $x0 = ADDXri $x0, 4, 0
+    $x0 = ADDXri $x0, 5, 0
+    $x0 = ADDXri $x0, 6, 0
+  bb.2:
+    liveins: $lr, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $x0 = ADDXri $x0, 1, 0
+    $x0 = ADDXri $x0, 2, 0
+    $x0 = ADDXri $x0, 3, 0
+    $x0 = ADDXri $x0, 4, 0
+    $x0 = ADDXri $x0, 5, 0
+    $x0 = ADDXri $x0, 6, 0
+  bb.3:
+    liveins: $lr, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $x0 = ADDXri $x0, 1, 0
+    $x0 = ADDXri $x0, 2, 0
+    $x0 = ADDXri $x0, 3, 0
+    $x0 = ADDXri $x0, 4, 0
+    $x0 = ADDXri $x0, 5, 0
+    $x0 = ADDXri $x0, 6, 0
+  bb.4:
+    liveins: $lr, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    RET $lr
+...
+---
+name: uses_sp
+body: |
+  bb.0:
+    liveins: $lr, $sp, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $w8 = LDRWui $sp, 0
+    $w8 = LDRWui $sp, 1
+    $w8 = LDRWui $sp, 2
+    $w8 = LDRWui $sp, 3
+    $w8 = LDRWui $sp, 4
+    $w8 = LDRWui $sp, 5
+  bb.1:
+    liveins: $lr, $sp, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $w8 = LDRWui $sp, 0
+    $w8 = LDRWui $sp, 1
+    $w8 = LDRWui $sp, 2
+    $w8 = LDRWui $sp, 3
+    $w8 = LDRWui $sp, 4
+    $w8 = LDRWui $sp, 5
+  bb.2:
+    liveins: $lr, $sp, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $w8 = LDRWui $sp, 0
+    $w8 = LDRWui $sp, 1
+    $w8 = LDRWui $sp, 2
+    $w8 = LDRWui $sp, 3
+    $w8 = LDRWui $sp, 4
+    $w8 = LDRWui $sp, 5
+  bb.3:
+    liveins: $lr, $sp, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    $w8 = LDRWui $sp, 0
+    $w8 = LDRWui $sp, 1
+    $w8 = LDRWui $sp, 2
+    $w8 = LDRWui $sp, 3
+    $w8 = LDRWui $sp, 4
+    $w8 = LDRWui $sp, 5
+  bb.4:
+    liveins: $lr, $sp, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x18, $x19, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28, $fp
+    RET $lr
+...
+---
+name: reg_save
+body: |
+  bb.0:
+    liveins: $lr, $sp
+    $w8 = LDRWui $sp, 0
+    $w8 = LDRWui $sp, 1
+    $w8 = LDRWui $sp, 2
+    $w8 = LDRWui $sp, 3
+    $w8 = LDRWui $sp, 4
+    $w8 = LDRWui $sp, 5
+  bb.1:
+    liveins: $lr, $sp
+    $w8 = LDRWui $sp, 0
+    $w8 = LDRWui $sp, 1
+    $w8 = LDRWui $sp, 2
+    $w8 = LDRWui $sp, 3
+    $w8 = LDRWui $sp, 4
+    $w8 = LDRWui $sp, 5
+  bb.2:
+    liveins: $lr
+    RET $lr
+...
+---
+name: no_lr_save
+body: |
+  bb.0:
+    liveins: $sp, $lr
+    $w8 = LDRWui $sp, 0
+    $w8 = LDRWui $sp, 1
+    $w8 = LDRWui $sp, 2
+    $w8 = LDRWui $sp, 3
+    $w8 = LDRWui $sp, 4
+    $w8 = LDRWui $sp, 5
+  bb.1:
+    RET undef $lr
+...
+
+# SIGNED-LABEL: name: {{ *}}no_sp
+# SIGNED-NOT: STRXpre
+# SIGNED-NOT: BL @OUTLINED
+# SIGNED: RET $lr
+# SIGNED-LABEL: name: {{ *}}uses_sp
+# SIGNED-NOT: STRXpre
+# SIGNED-NOT: BL @OUTLINED
+# SIGNED: RET $lr
+# SIGNED-LABEL: name: {{ *}}reg_save
+# SIGNED-NOT: STRXpre
+# SIGNED: $x[[REG:[0-9]+]] = ORRXrs $xzr, $lr, 0
+# SIGNED-NEXT: BL @[[FN:OUTLINED_FUNCTION_[0-9]+]]
+# SIGNED-NEXT: $lr = ORRXrs $xzr, $x[[REG]], 0
+# SIGNED-LABEL: name: {{ *}}no_lr_save
+# SIGNED-NOT: STRXpre
+# SIGNED: BL @[[FN]]
+# SIGNED: name: {{ *}}[[FN]]
+# SIGNED-NOT: STRXpre
+# SIGNED: $w8 = LDRWui $sp, 0
+# SIGNED-NEXT: $w8 = LDRWui $sp, 1
+# SIGNED-NEXT: $w8 = LDRWui $sp, 2
+# SIGNED-NEXT: $w8 = LDRWui $sp, 3
+# SIGNED-NEXT: $w8 = LDRWui $sp, 4
+# SIGNED-NEXT: $w8 = LDRWui $sp, 5
+# SIGNED-NOT: STRXpre
+# SIGNED: RET $lr
+
+# UNSIGNED-LABEL: name: {{ *}}no_sp
+# UNSIGNED: $sp = STRXpre $lr, $sp, -16
+# UNSIGNED-NEXT: BL @OUTLINED_FUNCTION_
+# UNSIGNED-NEXT: {{.*}}$sp, $lr = LDRXpost $sp, 16
+# UNSIGNED-LABEL: name: {{ *}}uses_sp
+# UNSIGNED: $sp = STRXpre $lr, $sp, -16
+# UNSIGNED-NEXT: BL @OUTLINED_FUNCTION_
+# UNSIGNED-NEXT: {{.*}}$sp, $lr = LDRXpost $sp, 16
+# UNSIGNED-LABEL: name: {{ *}}reg_save
+# UNSIGNED: $sp = STRXpre $lr, $sp, -16
+# UNSIGNED-NEXT: BL @OUTLINED_FUNCTION_
+# UNSIGNED-NEXT: {{.*}}$sp, $lr = LDRXpost $sp, 16
+# UNSIGNED-LABEL: name: {{ *}}no_lr_save
+# UNSIGNED: $sp = STRXpre $lr, $sp, -16
+# UNSIGNED-NEXT: BL @OUTLINED_FUNCTION_
+# UNSIGNED-NEXT: {{.*}}$sp, $lr = LDRXpost $sp, 16

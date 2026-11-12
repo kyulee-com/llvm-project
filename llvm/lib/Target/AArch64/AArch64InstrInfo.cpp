@@ -11002,9 +11002,12 @@ AArch64InstrInfo::getOutliningCandidateInfo(
         CandidatesWithoutStackFixups.push_back(C);
       }
 
-      // Is SP used in the sequence at all? If not, we don't have to modify
-      // the stack, so we are guaranteed to get the same frame.
-      else if (C.isAvailableInsideSeq(AArch64::SP, TRI)) {
+      // Is SP used in the sequence at all? If not, we don't have to fix up
+      // stack references, so we are guaranteed to get the same frame.
+      // Return address signing runs before outlining, so a leaf caller's LR
+      // may still be unsigned. Do not introduce a stack spill in that case.
+      else if (RASignCondition == SignReturnAddress::None &&
+               C.isAvailableInsideSeq(AArch64::SP, TRI)) {
         NumBytesNoStackCalls += 12;
         C.setCallInfo(MachineOutlinerDefault, 12);
         CandidatesWithoutStackFixups.push_back(C);
@@ -11017,10 +11020,10 @@ AArch64InstrInfo::getOutliningCandidateInfo(
       }
     }
 
-    // If there are no places where we have to save LR, then note that we
-    // don't have to update the stack. Otherwise, give every candidate the
-    // default call type, as long as it's safe to do so.
-    if (!AllStackInstrsSafe ||
+    // With return address signing, only keep calls that do not spill LR.
+    // Otherwise, give every candidate the default call type if it is safe
+    // and cheaper than dropping candidates that need stack fixups.
+    if (RASignCondition != SignReturnAddress::None || !AllStackInstrsSafe ||
         NumBytesNoStackCalls <= RepeatedSequenceLocs.size() * 12) {
       RepeatedSequenceLocs = CandidatesWithoutStackFixups;
       FrameID = MachineOutlinerNoLRSave;
