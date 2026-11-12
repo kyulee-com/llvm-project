@@ -10684,10 +10684,61 @@ AArch64InstrInfo::getOutliningCandidateInfo(
     std::vector<outliner::Candidate> &RepeatedSequenceLocs,
     unsigned MinRepeats) const {
   unsigned SequenceSize = 0;
-  for (auto &MI : RepeatedSequenceLocs[0])
-    SequenceSize += getInstSizeInBytes(MI);
+  unsigned HelperSequenceSize = 0;
+  for (auto &MI : RepeatedSequenceLocs[0]) {
+    auto Size = AArch64PAuth::getInstSizeInBytes(MI);
+    SequenceSize += Size.value_or(getInstSizeInBytes(MI));
+    HelperSequenceSize +=
+        AArch64PAuth::getInstSizeInBytes(MI, /*IgnoreKills=*/true)
+            .value_or(getInstSizeInBytes(MI));
+  }
+  // PAuth expansions depend on the auth-check policy and signed-GOT mode, not
+  // just the opcode and operands. Require the same policy and size everywhere.
+  for (auto &C : drop_begin(RepeatedSequenceLocs)) {
+    if (C.getMF()->getSubtarget<AArch64Subtarget>().isLFI() !=
+        RepeatedSequenceLocs[0]
+            .getMF()
+            ->getSubtarget<AArch64Subtarget>()
+            .isLFI())
+      return std::nullopt;
+    unsigned CandidateSize = 0;
+    for (auto &MI : C) {
+      auto Size = AArch64PAuth::getInstSizeInBytes(MI);
+      bool HasAuthCheck = MI.isBundle() ||
+                          MI.getOpcode() == AArch64::AUTx16x17 ||
+                          MI.getOpcode() == AArch64::AUTxMxN ||
+                          MI.getOpcode() == AArch64::AUTPAC ||
+                          MI.getOpcode() == AArch64::AUTPCPAC ||
+                          MI.getOpcode() == AArch64::AUTRELLOADPAC;
+      bool HasGOTAuth = MI.isBundle() ||
+                        MI.getOpcode() == AArch64::LOADgotPAC ||
+                        MI.getOpcode() == AArch64::LOADgotAUTH;
+      if (Size &&
+          ((HasAuthCheck &&
+            AArch64PAuth::getCheckMode(*C.getMF()) !=
+                AArch64PAuth::getCheckMode(*RepeatedSequenceLocs[0].getMF())) ||
+           (HasGOTAuth &&
+            (C.getMF()->getInfo<AArch64FunctionInfo>()->hasELFSignedGOT() !=
+                 RepeatedSequenceLocs[0]
+                     .getMF()
+                     ->getInfo<AArch64FunctionInfo>()
+                     ->hasELFSignedGOT() ||
+             C.getMF()->getSubtarget<AArch64Subtarget>().hasFPAC() !=
+                 RepeatedSequenceLocs[0]
+                     .getMF()
+                     ->getSubtarget<AArch64Subtarget>()
+                     .hasFPAC()))))
+        return std::nullopt;
+      CandidateSize += Size.value_or(getInstSizeInBytes(MI));
+    }
+    SequenceSize = std::min(SequenceSize, CandidateSize);
+  }
 
+  // Use a lower bound on the original sizes if kill flags differ. Account for
+  // any extra discriminator copies after the helper clears kills as overhead,
+  // not as bytes saved at each original occurrence.
   unsigned NumBytesToCreateFrame = 0;
+  const unsigned PAuthSizeOverhead = HelperSequenceSize - SequenceSize;
 
   // Avoid splitting ADRP ADD/LDR pair into outlined functions.
   // These instructions are fused together by the scheduler.
@@ -10768,10 +10819,8 @@ AArch64InstrInfo::getOutliningCandidateInfo(
         *RepeatedSequenceLocs[0].getMF());
     NumBytesToCheckLRInTCEpilogue =
         AArch64PAuth::getCheckerSizeInBytes(LRCheckMethod);
-    // Checking the authenticated LR value may significantly impact
-    // SequenceSize, so account for it for more precise results.
-    if (isTailCallReturnInst(RepeatedSequenceLocs[0].back()))
-      SequenceSize += NumBytesToCheckLRInTCEpilogue;
+    // getInstSizeInBytes already includes any tail-call LR check in
+    // SequenceSize; do not charge it a second time here.
   }
 
   // NonLeaf outlines with calls already require safe stack fixups below;
@@ -11160,7 +11209,8 @@ AArch64InstrInfo::getOutliningCandidateInfo(
     return std::nullopt;
 
   return std::make_unique<outliner::OutlinedFunction>(
-      RepeatedSequenceLocs, SequenceSize, NumBytesToCreateFrame, FrameID);
+      RepeatedSequenceLocs, SequenceSize,
+      NumBytesToCreateFrame + PAuthSizeOverhead, FrameID);
 }
 
 void AArch64InstrInfo::mergeOutliningCandidateAttributes(

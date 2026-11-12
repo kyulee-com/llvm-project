@@ -17,6 +17,7 @@
 #include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineInstrBundle.h"
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/IR/Module.h"
@@ -25,6 +26,171 @@ using namespace llvm;
 using namespace llvm::AArch64PAuth;
 
 #define AARCH64_POINTER_AUTH_NAME "AArch64 Pointer Authentication"
+
+AArch64PAuth::PtrauthCheckMode
+AArch64PAuth::getCheckMode(const MachineFunction &MF) {
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  if (auto Mode = STI.getCLOpts().ptrauth_auth_checks)
+    return *Mode;
+  if (STI.hasFPAC())
+    return PtrauthCheckMode::Unchecked;
+  return MF.getFunction().hasFnAttribute("ptrauth-auth-traps")
+             ? PtrauthCheckMode::Trap
+             : PtrauthCheckMode::Poison;
+}
+
+unsigned
+AArch64PAuth::getDiscriminatorSizeInBytes(uint64_t Disc, Register AddrDisc,
+                                          bool MayClobberAddrDisc,
+                                          const AArch64Subtarget &STI) {
+  assert(isUInt<16>(Disc) && "Constant discriminator is too wide");
+  if (!Disc)
+    return 0;
+  if (!AddrDisc || AddrDisc == AArch64::XZR)
+    return 4;
+  bool Safe = !STI.isX16X17Safer() || AddrDisc == AArch64::X16 ||
+              AddrDisc == AArch64::X17;
+  return MayClobberAddrDisc && Safe ? 4 : 8;
+}
+
+std::optional<unsigned> AArch64PAuth::getInstSizeInBytes(const MachineInstr &MI,
+                                                         bool IgnoreKills) {
+  const auto &MF = *MI.getMF();
+  const auto &STI = MF.getSubtarget<AArch64Subtarget>();
+  if (STI.isLFI())
+    return std::nullopt;
+  if (MI.isBundle()) {
+    unsigned Size = 0;
+    bool HasPAuth = false;
+    for (auto I = std::next(MI.getIterator()),
+              E = getBundleEnd(MI.getIterator());
+         I != E; ++I) {
+      auto PAuthSize = getInstSizeInBytes(*I, IgnoreKills);
+      HasPAuth |= PAuthSize.has_value();
+      Size +=
+          PAuthSize ? *PAuthSize : STI.getInstrInfo()->getInstSizeInBytes(*I);
+    }
+    return HasPAuth ? std::optional<unsigned>(Size) : std::nullopt;
+  }
+
+  auto DiscSize = [&](unsigned ImmOp, unsigned RegOp, bool CanClobber) {
+    return getDiscriminatorSizeInBytes(MI.getOperand(ImmOp).getImm(),
+                                       MI.getOperand(RegOp).getReg(),
+                                       CanClobber, STI);
+  };
+  auto Killed = [&](unsigned Op) {
+    return !IgnoreKills && MI.getOperand(Op).isKill();
+  };
+  auto AuthSize = [&](unsigned ImmOp, unsigned RegOp, bool CanClobber,
+                      bool Resign) {
+    unsigned Size = 4 + DiscSize(ImmOp, RegOp, CanClobber);
+    auto Mode = getCheckMode(MF);
+    if (Mode == PtrauthCheckMode::Trap)
+      Size += getCheckerSizeInBytes(AuthCheckMethod::XPAC);
+    else if (Resign && Mode == PtrauthCheckMode::Poison)
+      // The non-trapping XPAC check has a move and branch instead of BRK.
+      Size += getCheckerSizeInBytes(AuthCheckMethod::XPAC) + 4;
+    return Size;
+  };
+  // These counts mirror emitAddImm. Small offsets use one or two ADD/SUBs;
+  // wide offsets use MOVZ/MOVN, MOVKs through the highest nontrivial fragment,
+  // and ADD. Count the emitted sequence, not a minimal MOV-immediate sequence.
+  auto AddSize = [](int64_t Addend) -> unsigned {
+    if (!Addend)
+      return 0;
+    uint64_t Abs = Addend < 0 ? -uint64_t(Addend) : uint64_t(Addend);
+    if (isUInt<24>(Abs))
+      return Abs < 4096 ? 4 : 8;
+    uint64_t Imm = Addend < 0 ? ~uint64_t(Addend) : uint64_t(Addend);
+    unsigned Size = 8;
+    for (int Shift = 16; Shift < 64 && (Imm >> Shift); Shift += 16)
+      Size += 4;
+    return Size;
+  };
+
+  switch (MI.getOpcode()) {
+  default:
+    return std::nullopt;
+  case AArch64::PAC:
+    return 4 + DiscSize(3, 4, Killed(4));
+  case AArch64::BRA:
+  case AArch64::BLRA: {
+    Register Addr = MI.getOperand(3).getReg();
+    bool Clobber = MI.getOpcode() == AArch64::BLRA &&
+                   (Addr == AArch64::X16 || Addr == AArch64::X17);
+    return 4 + DiscSize(2, 3, Clobber);
+  }
+  case AArch64::AUTH_TCRETURN:
+  case AArch64::AUTH_TCRETURN_BTI: {
+    Register Addr = MI.getOperand(4).getReg();
+    unsigned Size =
+        4 + DiscSize(3, 4, Addr == AArch64::X16 || Addr == AArch64::X17);
+    if (MF.getInfo<AArch64FunctionInfo>()->shouldSignReturnAddress(MF))
+      Size += getCheckerSizeInBytes(STI.getAuthenticatedLRCheckMethod(MF));
+    return Size;
+  }
+  case AArch64::AUTx16x17:
+    return AuthSize(
+        1, 2, Killed(2) && MI.getOperand(2).getReg() != AArch64::X16, false);
+  case AArch64::AUTxMxN:
+    return AuthSize(4, 5,
+                    Killed(5) &&
+                        MI.getOperand(5).getReg() != MI.getOperand(0).getReg(),
+                    false);
+  case AArch64::AUTPAC:
+  case AArch64::AUTRELLOADPAC: {
+    Register Addr = MI.getOperand(2).getReg();
+    unsigned Size = AuthSize(1, 2,
+                             Killed(2) && Addr != AArch64::X16 &&
+                                 Addr != MI.getOperand(5).getReg(),
+                             true) +
+                    4 + DiscSize(4, 5, Killed(5));
+    if (MI.getOpcode() == AArch64::AUTRELLOADPAC) {
+      int64_t Addend = MI.getOperand(6).getImm();
+      if (isInt<9>(Addend))
+        Size += 8;
+      else if (isUInt<24>(Addend))
+        Size += AddSize(Addend) + 8;
+      else {
+        // The indirect-load expansion omits zero MOVK fragments.
+        Size += 16;
+        for (int Shift = 16; Shift < 64; Shift += 16)
+          if ((uint64_t(Addend) >> Shift) & 0xffff)
+            Size += 4;
+      }
+    }
+    return Size;
+  }
+  case AArch64::AUTPCPAC: {
+    auto Mode = getCheckMode(MF);
+    unsigned Size = 8 + DiscSize(2, 3, Killed(3));
+    if (Mode != PtrauthCheckMode::Unchecked)
+      Size += getCheckerSizeInBytes(AuthCheckMethod::XPAC) +
+              (Mode == PtrauthCheckMode::Poison ? 4 : 0);
+    return Size;
+  }
+  case AArch64::MOVaddrPAC:
+  case AArch64::LOADgotPAC: {
+    unsigned Size =
+        12 + AddSize(MI.getOperand(0).getOffset()) + DiscSize(3, 2, false);
+    if (MI.getOpcode() == AArch64::LOADgotPAC &&
+        MF.getInfo<AArch64FunctionInfo>()->hasELFSignedGOT()) {
+      Size += 8;
+      if (!STI.hasFPAC())
+        Size += getCheckerSizeInBytes(AuthCheckMethod::XPAC);
+    }
+    return Size;
+  }
+  case AArch64::LOADgotAUTH: {
+    unsigned Size = MF.getTarget().getCodeModel() == CodeModel::Tiny ? 12 : 16;
+    if (MI.getOperand(1).getGlobal()->hasExternalWeakLinkage())
+      Size += 4;
+    if (!STI.hasFPAC())
+      Size += getCheckerSizeInBytes(AuthCheckMethod::XPAC) + 4;
+    return Size;
+  }
+  }
+}
 
 namespace {
 

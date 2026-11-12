@@ -1,0 +1,85 @@
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+pauth -run-pass=machine-outliner -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+pauth -run-pass=machine-outliner -machine-outliner-reruns=2 -verify-machineinstrs %s -o - | FileCheck %s
+#
+# Bundle members need both real expansion sizes and context checks. Clearing
+# kills adds a discriminator copy to the PAC helper, so two bundled PAC+RET
+# sequences would not shrink. AUTPAC must not share Trap and Poison expansions,
+# even though the differing instructions are hidden inside a bundle.
+--- |
+  define i64 @killed_bundle_a(i64 %p, i64 %a) minsize noredzone { ret i64 0 }
+  define i64 @killed_bundle_b(i64 %p, i64 %a) minsize noredzone { ret i64 0 }
+  define i64 @trap_bundle(i64 %p) minsize noredzone "ptrauth-auth-traps" { ret i64 0 }
+  define i64 @poison_bundle(i64 %p) minsize noredzone { ret i64 0 }
+...
+---
+name: killed_bundle_a
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0, $x1
+    ; CHECK-LABEL: name: killed_bundle_a
+    ; CHECK: BUNDLE
+    ; CHECK-NEXT: $x0 = PAC $x0, 0, 42, killed $x1
+    ; CHECK-NEXT: }
+    ; CHECK-NEXT: RET_ReallyLR implicit $x0
+    BUNDLE implicit-def $x0, implicit-def $x16, implicit-def $x17, implicit $x0, implicit $x1 {
+      $x0 = PAC $x0, 0, 42, killed $x1, implicit-def $x16, implicit-def $x17
+    }
+    RET_ReallyLR implicit $x0
+...
+---
+name: killed_bundle_b
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0, $x1
+    ; CHECK-LABEL: name: killed_bundle_b
+    ; CHECK: BUNDLE
+    ; CHECK-NEXT: $x0 = PAC $x0, 0, 42, killed $x1
+    ; CHECK-NEXT: }
+    ; CHECK-NEXT: RET_ReallyLR implicit $x0
+    BUNDLE implicit-def $x0, implicit-def $x16, implicit-def $x17, implicit $x0, implicit $x1 {
+      $x0 = PAC $x0, 0, 42, killed $x1, implicit-def $x16, implicit-def $x17
+    }
+    RET_ReallyLR implicit $x0
+...
+---
+name: trap_bundle
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    ; CHECK-LABEL: name: trap_bundle
+    ; CHECK: BUNDLE
+    ; CHECK-NEXT: $x16 = ORRXrs $xzr, $x0, 0
+    ; CHECK-NEXT: AUTPAC 2, 11, $noreg, 3, 17, $noreg
+    ; CHECK-NEXT: $x0 = ORRXrs $xzr, internal $x16, 0
+    ; CHECK-NEXT: }
+    ; CHECK-NEXT: RET_ReallyLR implicit $x0
+    BUNDLE implicit-def $x0, implicit-def $x16, implicit-def $x17, implicit-def $nzcv, implicit $x0 {
+      $x16 = ORRXrs $xzr, $x0, 0
+      AUTPAC 2, 11, $noreg, 3, 17, $noreg, implicit-def $x16, implicit-def $x17, implicit-def $nzcv, implicit internal $x16
+      $x0 = ORRXrs $xzr, internal $x16, 0
+    }
+    RET_ReallyLR implicit $x0
+...
+---
+name: poison_bundle
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    ; CHECK-LABEL: name: poison_bundle
+    ; CHECK: BUNDLE
+    ; CHECK-NEXT: $x16 = ORRXrs $xzr, $x0, 0
+    ; CHECK-NEXT: AUTPAC 2, 11, $noreg, 3, 17, $noreg
+    ; CHECK-NEXT: $x0 = ORRXrs $xzr, internal $x16, 0
+    ; CHECK-NEXT: }
+    ; CHECK-NEXT: RET_ReallyLR implicit $x0
+    BUNDLE implicit-def $x0, implicit-def $x16, implicit-def $x17, implicit-def $nzcv, implicit $x0 {
+      $x16 = ORRXrs $xzr, $x0, 0
+      AUTPAC 2, 11, $noreg, 3, 17, $noreg, implicit-def $x16, implicit-def $x17, implicit-def $nzcv, implicit internal $x16
+      $x0 = ORRXrs $xzr, internal $x16, 0
+    }
+    RET_ReallyLR implicit $x0
+...

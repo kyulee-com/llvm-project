@@ -1,0 +1,112 @@
+# RUN: llc -mtriple=aarch64-linux-gnu -mattr=+pauth -run-pass=machine-outliner -verify-machineinstrs %s -o - | FileCheck %s
+#
+# A killed blend discriminator may be overwritten in the original sequence,
+# but the helper clears kills and needs a copy. Do not invent savings from it.
+# Also do not share authentication between incompatible trapping policies.
+--- |
+  define i64 @killed_a(i64 %p, i64 %a) minsize noredzone { ret i64 0 }
+  define i64 @killed_b(i64 %p, i64 %a) minsize noredzone { ret i64 0 }
+  define i64 @trap(i64 %p) minsize noredzone "ptrauth-auth-traps" { ret i64 0 }
+  define i64 @poison(i64 %p) minsize noredzone { ret i64 0 }
+  @callee = external global i64
+  define i64 @fpac() minsize noredzone "target-features"="+pauth,+fpac" { ret i64 0 }
+  define i64 @nofpac() minsize noredzone "target-features"="+pauth,-fpac" { ret i64 0 }
+  define i64 @bundle_a(i64 %p) minsize noredzone { ret i64 0 }
+  define i64 @bundle_b(i64 %p) minsize noredzone { ret i64 0 }
+...
+---
+name: killed_a
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0, $x1
+    ; CHECK-LABEL: name: killed_a
+    ; CHECK: $x0 = PAC $x0, 0, 42, killed $x1
+    $x0 = PAC $x0, 0, 42, killed $x1, implicit-def $x16, implicit-def $x17
+    RET_ReallyLR implicit $x0
+...
+---
+name: killed_b
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0, $x1
+    ; CHECK-LABEL: name: killed_b
+    ; CHECK: $x0 = PAC $x0, 0, 42, killed $x1
+    $x0 = PAC $x0, 0, 42, killed $x1, implicit-def $x16, implicit-def $x17
+    RET_ReallyLR implicit $x0
+...
+---
+name: trap
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    ; CHECK-LABEL: name: trap
+    ; CHECK: AUTx16x17 0, 0, $noreg
+    $x16 = ORRXrs $xzr, $x0, 0
+    AUTx16x17 0, 0, $noreg, implicit-def $x16, implicit-def $x17, implicit-def $nzcv, implicit $x16
+    $x0 = ORRXrs $xzr, $x16, 0
+    RET_ReallyLR implicit $x0
+...
+---
+name: poison
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    ; CHECK-LABEL: name: poison
+    ; CHECK: AUTx16x17 0, 0, $noreg
+    $x16 = ORRXrs $xzr, $x0, 0
+    AUTx16x17 0, 0, $noreg, implicit-def $x16, implicit-def $x17, implicit-def $nzcv, implicit $x16
+    $x0 = ORRXrs $xzr, $x16, 0
+    RET_ReallyLR implicit $x0
+...
+---
+name: fpac
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: fpac
+    ; CHECK: $x0 = LOADgotAUTH @callee
+    $x0 = LOADgotAUTH @callee, implicit-def $x16, implicit-def $x17, implicit-def $nzcv
+    RET_ReallyLR implicit $x0
+...
+---
+name: nofpac
+tracksRegLiveness: true
+body: |
+  bb.0:
+    ; CHECK-LABEL: name: nofpac
+    ; CHECK: $x0 = LOADgotAUTH @callee
+    $x0 = LOADgotAUTH @callee, implicit-def $x16, implicit-def $x17, implicit-def $nzcv
+    RET_ReallyLR implicit $x0
+...
+---
+name: bundle_a
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    ; CHECK-LABEL: name: bundle_a
+    ; CHECK: BUNDLE
+    ; CHECK: $x0 = PAC $x0, 1, 0, $noreg
+    BUNDLE implicit-def $x0, implicit-def $x16, implicit-def $x17, implicit $x0 {
+      $x0 = PAC $x0, 1, 0, $noreg, implicit-def $x16, implicit-def $x17
+    }
+    RET_ReallyLR implicit $x0
+...
+---
+name: bundle_b
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $x0
+    ; CHECK-LABEL: name: bundle_b
+    ; CHECK: BUNDLE
+    ; CHECK: $x0 = PAC $x0, 1, 0, $noreg
+    BUNDLE implicit-def $x0, implicit-def $x16, implicit-def $x17, implicit $x0 {
+      $x0 = PAC $x0, 1, 0, $noreg, implicit-def $x16, implicit-def $x17
+    }
+    RET_ReallyLR implicit $x0
+...

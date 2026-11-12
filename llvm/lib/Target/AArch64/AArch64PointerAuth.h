@@ -10,8 +10,13 @@
 #define LLVM_LIB_TARGET_AARCH64_AARCH64POINTERAUTH_H
 
 #include "Utils/AArch64BaseInfo.h"
+#include "llvm/CodeGen/Register.h"
+#include <optional>
 
 namespace llvm {
+class AArch64Subtarget;
+class MachineFunction;
+class MachineInstr;
 namespace AArch64PAuth {
 
 /// PAuth key to be used with function pointers in .init_array and .fini_array.
@@ -101,6 +106,21 @@ enum class AuthCheckMethod {
 
 /// Ways to check pointer authentication auth/resign failures.
 enum class PtrauthCheckMode { Unchecked, Poison, Trap };
+
+PtrauthCheckMode getCheckMode(const MachineFunction &MF);
+
+/// Size of the discriminator materialization used by AsmPrinter.
+unsigned getDiscriminatorSizeInBytes(uint64_t Disc, Register AddrDisc,
+                                     bool MayClobberAddrDisc,
+                                     const AArch64Subtarget &STI);
+
+/// Expansion size of PAuth pseudos, for profitability rather than layout.
+/// Bundles use these sizes for PAuth members and layout sizes for other members.
+/// IgnoreKills models the outliner's clearing of kill flags in the helper.
+/// Returns nullopt for other instructions and for LFI, whose streamer rewrites
+/// can change the size further.
+std::optional<unsigned> getInstSizeInBytes(const MachineInstr &MI,
+                                           bool IgnoreKills = false);
 
 /// Control the emission of .cfi_set_ra_state, which replaces the
 /// deprecated .cfi_negate_ra_state_with_pc [1].

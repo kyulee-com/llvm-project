@@ -2114,7 +2114,8 @@ Register AArch64AsmPrinter::emitPtrauthDiscriminator(uint64_t Disc,
   // If there are both, emit a blend into the scratch register.
 
   // Check if we can save one MOV instruction.
-  if (MayClobberAddrDisc && isPtrauthRegSafe(AddrDisc)) {
+  if (AArch64PAuth::getDiscriminatorSizeInBytes(
+          Disc, AddrDisc, MayClobberAddrDisc, *STI) == 4) {
     ScratchReg = AddrDisc;
   } else {
     emitMovXReg(ScratchReg, AddrDisc);
@@ -2390,23 +2391,6 @@ void AArch64AsmPrinter::emitPtrauthApplyIndirectAddend(Register Pointer,
                      .addImm(0));
 }
 
-static PtrauthCheckMode getCheckMode(const MachineFunction *MF) {
-  const AArch64Subtarget &STI = MF->getSubtarget<AArch64Subtarget>();
-
-  // If an override is passed via command line argument, just use that value.
-  if (std::optional<PtrauthCheckMode> Mode =
-          STI.getCLOpts().ptrauth_auth_checks)
-    return *Mode;
-
-  // Otherwise, on an FPAC CPU, you get traps whether you want them or not:
-  // there's no point in emitting checks or traps.
-  if (STI.hasFPAC())
-    return PtrauthCheckMode::Unchecked;
-
-  bool ShouldTrap = MF->getFunction().hasFnAttribute("ptrauth-auth-traps");
-  return ShouldTrap ? PtrauthCheckMode::Trap : PtrauthCheckMode::Poison;
-}
-
 // We expand non-signing AUT* pseudo instructions into a sequence of the form
 //
 //      ; 1. Authenticate Pointer
@@ -2439,7 +2423,7 @@ void AArch64AsmPrinter::emitPtrauthAuthResign(
     Register Pointer, Register Scratch, PtrAuthSchema AuthSchema,
     std::optional<PtrAuthSchema> SignSchema, std::optional<int64_t> Addend,
     Value *DS) {
-  const PtrauthCheckMode CheckMode = getCheckMode(MF);
+  const PtrauthCheckMode CheckMode = AArch64PAuth::getCheckMode(*MF);
   const bool IsAuthWithPC = AuthSchema.PCDisc.isValid();
   assert(!SignSchema || !SignSchema->PCDisc.isValid());
 
@@ -3463,6 +3447,8 @@ void AArch64AsmPrinter::emitInstruction(const MachineInstr *MI) {
 #ifndef NDEBUG
   InstsEmitted = 0;
   llvm::scope_exit CheckMISize([&]() {
+    if (auto Size = AArch64PAuth::getInstSizeInBytes(*MI))
+      assert(*Size == InstsEmitted * 4 && "Incorrect PAuth expansion size");
     assert(STI->getInstrInfo()->getInstSizeInBytes(*MI) >= InstsEmitted * 4);
   });
 #endif
