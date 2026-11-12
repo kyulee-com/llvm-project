@@ -1,0 +1,51 @@
+# RUN: llc -mtriple=aarch64 -run-pass=machine-outliner -run-pass=aarch64-ptrauth -verify-machineinstrs %s -o - | FileCheck %s
+# RUN: llc -mtriple=arm64e-apple-macosx -mattr=+pauth -run-pass=machine-outliner -run-pass=aarch64-ptrauth -verify-machineinstrs %s -o - | FileCheck %s
+
+# Four instructions repeated twice save four bytes if the outlined leaf has
+# just a RET. NonLeaf must not charge for signing an outlined leaf.
+--- |
+  declare void @callee0()
+  declare void @callee1()
+  define void @foo() #0 { ret void }
+  define void @bar() #0 { ret void }
+  attributes #0 = { minsize noredzone "sign-return-address"="non-leaf" "sign-return-address-key"="b_key" }
+...
+---
+name: foo
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    BL @callee0, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    RET undef $lr
+...
+---
+name: bar
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    BL @callee1, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    RET undef $lr
+...
+# CHECK-LABEL: name: foo
+# CHECK: BL @[[OUTLINE:OUTLINED_FUNCTION_[0-9]+]]
+# CHECK-LABEL: name: bar
+# CHECK: BL @[[OUTLINE]]
+# CHECK: name: [[OUTLINE]]
+# CHECK: body:
+# CHECK: bb.0:
+# CHECK-NOT: PAC
+# CHECK: $w0 = MOVZWi 1, 0
+# CHECK-NEXT: $w1 = MOVZWi 2, 0
+# CHECK-NEXT: $w2 = MOVZWi 3, 0
+# CHECK-NEXT: $w3 = MOVZWi 4, 0
+# CHECK-NEXT: RET $lr

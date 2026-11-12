@@ -1,0 +1,137 @@
+# RUN: split-file %s %t
+# RUN: llc -mtriple=aarch64 -mattr=+pauth -run-pass=machine-outliner -run-pass=aarch64-ptrauth -verify-machineinstrs %t/non-leaf.mir -o - | FileCheck %s --check-prefix=NONLEAF
+# RUN: llc -mtriple=arm64e-apple-macosx -mattr=+pauth -run-pass=machine-outliner -run-pass=aarch64-ptrauth -verify-machineinstrs %t/ptrauth.mir -o - | FileCheck %s --check-prefix=NONLEAF
+# RUN: llc -mtriple=aarch64 -mattr=+pauth -run-pass=machine-outliner -run-pass=aarch64-ptrauth -verify-machineinstrs %t/all.mir -o - | FileCheck %s --check-prefix=ALL
+
+# The outlined leaf may change SP if it does not sign LR. The caller restores
+# SP after the next call. The same outline is not legal when signing is All.
+# NONLEAF-LABEL: name: foo
+# NONLEAF: BL @[[OUTLINE:OUTLINED_FUNCTION_[0-9]+]]
+# NONLEAF-LABEL: name: bar
+# NONLEAF: BL @[[OUTLINE]]
+# NONLEAF: name: [[OUTLINE]]
+# NONLEAF: body:
+# NONLEAF: bb.0:
+# NONLEAF-NOT: PAC
+# NONLEAF: $w0 = MOVZWi 1, 0
+# NONLEAF-NEXT: $w1 = MOVZWi 2, 0
+# NONLEAF-NEXT: $w2 = MOVZWi 3, 0
+# NONLEAF-NEXT: $w3 = MOVZWi 4, 0
+# NONLEAF-NEXT: $sp = SUBXri $sp, 16, 0
+# NONLEAF-NEXT: RET $lr
+# ALL-NOT: OUTLINED_FUNCTION_
+
+#--- non-leaf.mir
+--- |
+  declare void @callee0()
+  declare void @callee1()
+  define void @foo() #0 { ret void }
+  define void @bar() #0 { ret void }
+  attributes #0 = { minsize noredzone "sign-return-address"="non-leaf" "sign-return-address-key"="b_key" }
+...
+---
+name: foo
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $sp = SUBXri $sp, 16, 0
+    BL @callee0, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $sp = ADDXri $sp, 16, 0
+    RET undef $lr
+...
+---
+name: bar
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $sp = SUBXri $sp, 16, 0
+    BL @callee1, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $sp = ADDXri $sp, 16, 0
+    RET undef $lr
+...
+#--- ptrauth.mir
+--- |
+  declare void @callee0()
+  declare void @callee1()
+  define void @foo() #0 { ret void }
+  define void @bar() #0 { ret void }
+  attributes #0 = { minsize noredzone "ptrauth-returns" "ptrauth-auth-traps" }
+...
+---
+name: foo
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $sp = SUBXri $sp, 16, 0
+    BL @callee0, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $sp = ADDXri $sp, 16, 0
+    RET undef $lr
+...
+---
+name: bar
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $sp = SUBXri $sp, 16, 0
+    BL @callee1, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $sp = ADDXri $sp, 16, 0
+    RET undef $lr
+...
+#--- all.mir
+--- |
+  declare void @callee0()
+  declare void @callee1()
+  define void @foo() #0 { ret void }
+  define void @bar() #0 { ret void }
+  attributes #0 = { minsize noredzone "sign-return-address"="all" "sign-return-address-key"="b_key" }
+...
+---
+name: foo
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $sp = SUBXri $sp, 16, 0
+    BL @callee0, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $sp = ADDXri $sp, 16, 0
+    RET undef $lr
+...
+---
+name: bar
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $sp = SUBXri $sp, 16, 0
+    BL @callee1, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $sp = ADDXri $sp, 16, 0
+    RET undef $lr
+...

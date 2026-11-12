@@ -1,8 +1,8 @@
 # RUN: llc -mtriple=aarch64 -run-pass=prolog-epilog -run-pass=machine-outliner \
 # RUN: -run-pass=aarch64-ptrauth %s -o - | FileCheck %s
 
-# Check that we save LR to a callee-saved register when possible.
-# foo() should use a callee-saved register. However, bar() should not.
+# Check that we save LR to an available register when possible. Both outlined
+# functions are leaves, so NonLeaf does not add a signing cost to their frames.
 --- |
 
   define void @foo() #0 {
@@ -82,18 +82,26 @@ body:             |
 # CHECK:            frame-setup EMITBKEY
 # CHECK-NEXT:       frame-setup PACIBSP implicit-def $lr, implicit $lr, implicit $sp
 # CHECK-NEXT:       frame-setup CFI_INSTRUCTION negate_ra_sign_state
-# CHECK-NOT:        OUTLINED_FUNCTION_
+# CHECK:            $x18 = ORRXrs $xzr, $lr, 0
+# CHECK-NEXT:       BL @[[BAR_OUTLINE:OUTLINED_FUNCTION_[0-9]+]]
+# CHECK-NEXT:       $lr = ORRXrs $xzr, $x18, 0
 # CHECK:          bb.1:
-# CHECK-NOT:        OUTLINED_FUNCTION_
+# CHECK:            $x18 = ORRXrs $xzr, $lr, 0
+# CHECK-NEXT:       BL @[[BAR_OUTLINE]]
+# CHECK-NEXT:       $lr = ORRXrs $xzr, $x18, 0
 # CHECK:          bb.2:
-# CHECK-NOT:        OUTLINED_FUNCTION_
+# CHECK:            $x18 = ORRXrs $xzr, $lr, 0
+# CHECK-NEXT:       BL @[[BAR_OUTLINE]]
+# CHECK-NEXT:       $lr = ORRXrs $xzr, $x18, 0
 # CHECK:          bb.3:
-# CHECK-NOT:        OUTLINED_FUNCTION_
 # CHECK:            RET
 name:            bar
 body:             |
   bb.0:
     liveins: $lr, $x0, $x1, $x2, $x3, $x4, $x5, $x6, $x7, $x8, $x9, $x10, $x11, $x12, $x13, $x14, $x15, $x19, $x20, $x21, $x22, $x23, $x20, $x21, $x22, $x23, $x24, $x25, $x26, $x27, $x28
+    ; The prologue consumes the incoming LR. Define a live value for the
+    ; repeated region, as foo does, rather than saving an undefined register.
+    $lr = ORRXri $xzr, 1
     $w10 = ORRWri $wzr, 1
     $w10 = ORRWri $wzr, 1
     $w10 = ORRWri $wzr, 1

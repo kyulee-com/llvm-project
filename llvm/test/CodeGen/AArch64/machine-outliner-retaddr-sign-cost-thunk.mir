@@ -1,0 +1,54 @@
+# RUN: llc -mtriple=aarch64 -mattr=+pauth -run-pass=machine-outliner,aarch64-ptrauth -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=SIGNED
+# RUN: llc -mtriple=aarch64 -mattr=+pauth -aarch64-authenticated-lr-check-method=high-bits-notbi -run-pass=machine-outliner,aarch64-ptrauth -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=CHECKER
+
+# Unlike RETAB, a thunk needs a separate AUTIBSP, for eight signing bytes.
+# Its final call becomes a tail call. A checker adds twelve more bytes and
+# makes this pair unprofitable. A call's implicit SP def must not reject it.
+--- |
+  declare void @callee()
+  define void @foo() #0 { ret void }
+  define void @bar() #0 { ret void }
+  attributes #0 = { minsize noredzone "sign-return-address"="all" "sign-return-address-key"="b_key" }
+...
+---
+name: foo
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    BL @callee, csr_aarch64_aapcs, implicit-def dead $lr, implicit-def $sp, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $w0 = MOVZWi 5, 0
+    RET undef $lr
+...
+---
+name: bar
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    BL @callee, csr_aarch64_aapcs, implicit-def dead $lr, implicit-def $sp, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3
+    $w0 = MOVZWi 6, 0
+    RET undef $lr
+...
+# SIGNED-LABEL: name: foo
+# SIGNED: BL @[[OUTLINE:OUTLINED_FUNCTION_[0-9]+]]
+# SIGNED-LABEL: name: bar
+# SIGNED: BL @[[OUTLINE]]
+# SIGNED: name: [[OUTLINE]]
+# SIGNED: body:
+# SIGNED: frame-setup PACIBSP
+# SIGNED: $w0 = MOVZWi 1, 0
+# SIGNED-NEXT: $w1 = MOVZWi 2, 0
+# SIGNED-NEXT: $w2 = MOVZWi 3, 0
+# SIGNED-NEXT: $w3 = MOVZWi 4, 0
+# SIGNED-NEXT: frame-destroy AUTIBSP
+# SIGNED-NEXT: TCRETURNdi @callee, 0
+# CHECKER-NOT: OUTLINED_FUNCTION_

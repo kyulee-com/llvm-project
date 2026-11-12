@@ -1,0 +1,55 @@
+# RUN: llc -mtriple=aarch64 -run-pass=machine-outliner -run-pass=aarch64-ptrauth -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=NO-PAUTH
+# RUN: llc -mtriple=aarch64 -mattr=+pauth -run-pass=machine-outliner -run-pass=aarch64-ptrauth -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=PAUTH
+
+# Five instructions repeated twice save four bytes with PACIBSP + RETAB.
+# A separate AUTIBSP + RET instead makes the outline unprofitable.
+--- |
+  declare void @callee0()
+  declare void @callee1()
+  define void @foo() #0 { ret void }
+  define void @bar() #0 { ret void }
+  attributes #0 = { minsize noredzone "sign-return-address"="all" "sign-return-address-key"="b_key" }
+...
+---
+name: foo
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $w4 = MOVZWi 5, 0
+    BL @callee0, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3, implicit $w4
+    RET undef $lr
+...
+---
+name: bar
+machineFunctionInfo:
+  hasRedZone: false
+body: |
+  bb.0:
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    $w3 = MOVZWi 4, 0
+    $w4 = MOVZWi 5, 0
+    BL @callee1, csr_aarch64_aapcs, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit $w3, implicit $w4
+    RET undef $lr
+...
+# NO-PAUTH-NOT: OUTLINED_FUNCTION_
+# PAUTH-LABEL: name: foo
+# PAUTH: BL @[[OUTLINE:OUTLINED_FUNCTION_[0-9]+]]
+# PAUTH-LABEL: name: bar
+# PAUTH: BL @[[OUTLINE]]
+# PAUTH: name: [[OUTLINE]]
+# PAUTH: body:
+# PAUTH: bb.0:
+# PAUTH: frame-setup PACIBSP
+# PAUTH: $w0 = MOVZWi 1, 0
+# PAUTH-NEXT: $w1 = MOVZWi 2, 0
+# PAUTH-NEXT: $w2 = MOVZWi 3, 0
+# PAUTH-NEXT: $w3 = MOVZWi 4, 0
+# PAUTH-NEXT: $w4 = MOVZWi 5, 0
+# PAUTH-NEXT: frame-destroy RETAB

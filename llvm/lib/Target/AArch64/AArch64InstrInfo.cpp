@@ -10734,17 +10734,9 @@ AArch64InstrInfo::getOutliningCandidateInfo(
     return std::nullopt;
   }
 
-  // Since at this point all candidates agree on their return address signing
-  // picking just one is fine. If the candidate functions potentially sign their
-  // return addresses, the outlined function should do the same. Note that in
-  // the case of "sign-return-address"="non-leaf" this is an assumption: It is
-  // not certainly true that the outlined function will have to sign its return
-  // address but this decision is made later, when the decision to outline
-  // has already been made.
-  // The same holds for the number of additional instructions we need: On
-  // v8.3a RET can be replaced by RETAA/RETAB and no AUT instruction is
-  // necessary. However, at this point we don't know if the outlined function
-  // will have a RET instruction so we assume the worst.
+  // All candidates agree on their return address signing attributes. The
+  // outlined function's signing cost is computed below, once we know whether
+  // its body will contain a non-tail call.
   const TargetRegisterInfo &TRI = getRegisterInfo();
   // Performing a tail call may require extra checks when PAuth is enabled.
   // If PAuth is disabled, set it to zero for uniformity.
@@ -10771,9 +10763,6 @@ AArch64InstrInfo::getOutliningCandidateInfo(
     if (RepeatedSequenceLocs.size() < MinRepeats)
       return std::nullopt;
 
-    // One PAC and one AUT instructions
-    NumBytesToCreateFrame += 8;
-
     // PAuth is enabled - set extra tail call cost, if any.
     auto LRCheckMethod = Subtarget.getAuthenticatedLRCheckMethod(
         *RepeatedSequenceLocs[0].getMF());
@@ -10783,7 +10772,12 @@ AArch64InstrInfo::getOutliningCandidateInfo(
     // SequenceSize, so account for it for more precise results.
     if (isTailCallReturnInst(RepeatedSequenceLocs[0].back()))
       SequenceSize += NumBytesToCheckLRInTCEpilogue;
+  }
 
+  // NonLeaf outlines with calls already require safe stack fixups below;
+  // their leaf outlines do not sign LR. All also signs leaf outlines, so it
+  // needs the additional check that SP is restored before authentication.
+  if (RASignCondition == SignReturnAddress::All) {
     // We have to check if sp modifying instructions would get outlined.
     // If so we only allow outlining if sp is unchanged overall, so matching
     // sub and add instructions are okay to outline, all other sp modifications
@@ -10791,6 +10785,10 @@ AArch64InstrInfo::getOutliningCandidateInfo(
     auto hasIllegalSPModification = [&TRI](outliner::Candidate &C) {
       int SPValue = 0;
       for (auto &MI : C) {
+        // A call's implicit SP def does not change SP across the call. Any
+        // outgoing argument adjustments are separate instructions.
+        if (MI.isCall() && !MI.isReturn())
+          continue;
         if (MI.modifiesRegister(AArch64::SP, &TRI)) {
           switch (MI.getOpcode()) {
           case AArch64::ADDXri:
@@ -11092,13 +11090,13 @@ AArch64InstrInfo::getOutliningCandidateInfo(
       return std::nullopt;
   }
 
+  bool ModStackToSaveLR = false;
   // Does every candidate's MBB contain a call? If so, then we might have a call
   // in the range.
   if (FlagsSetInAll & MachineOutlinerMBBFlags::HasCalls) {
     // Check if the range contains a call. These require a save + restore of the
     // link register.
     outliner::Candidate &FirstCand = RepeatedSequenceLocs[0];
-    bool ModStackToSaveLR = false;
     if (any_of(drop_end(FirstCand),
                [](const MachineInstr &MI) { return MI.isCall(); }))
       ModStackToSaveLR = true;
@@ -11125,6 +11123,34 @@ AArch64InstrInfo::getOutliningCandidateInfo(
               RepeatedSequenceLocs, TRI))
         NumBytesToCreateFrame += 4;
     }
+  }
+
+  // Match buildOutlinedFrame: a thunk's final call becomes a tail call and
+  // does not make the outlined function non-leaf.
+  if (AArch64FunctionInfo::shouldSignReturnAddress(RASignCondition,
+                                                   ModStackToSaveLR)) {
+    const MachineFunction &FirstMF = *RepeatedSequenceLocs[0].getMF();
+    const auto &STI = FirstMF.getSubtarget<AArch64Subtarget>();
+    bool EndsInTailCall = FrameID == MachineOutlinerThunk ||
+                          isTailCallReturnInst(RepeatedSequenceLocs[0].back());
+    // FIXME: Tail-call LR checks use callee-saved info, which outlined
+    // functions lack. Do not introduce a signed NonLeaf tail call that would
+    // skip its required check.
+    if (EndsInTailCall && NumBytesToCheckLRInTCEpilogue &&
+        RASignCondition != SignReturnAddress::All)
+      return std::nullopt;
+
+    // PAC is always needed. With PAuth, AUT and RET combine into RETAA/RETAB;
+    // tail calls instead need a separate AUT instruction.
+    NumBytesToCreateFrame += 4;
+    if (EndsInTailCall || !STI.hasPAuth())
+      NumBytesToCreateFrame += 4;
+
+    // Without FEAT_PAuth_LR, PC signing also needs PACM in the prologue and
+    // ADRP, ADD and PACM in the epilogue.
+    if (FirstMF.getInfo<AArch64FunctionInfo>()->branchProtectionPAuthLR() &&
+        !STI.hasPAuthLR())
+      NumBytesToCreateFrame += 16;
   }
 
   // If we have CFI instructions, we can only outline if the outlined section
@@ -11506,6 +11532,10 @@ static void signOutlinedFunction(MachineFunction &MF, MachineBasicBlock &MBB,
                                  bool ShouldSignReturnAddr) {
   if (!ShouldSignReturnAddr)
     return;
+
+  // A signed leaf thunk may not otherwise reference the incoming LR.
+  if (!MBB.isLiveIn(AArch64::LR))
+    MBB.addLiveIn(AArch64::LR);
 
   BuildMI(MBB, MBB.begin(), DebugLoc(), TII->get(AArch64::PAUTH_PROLOGUE))
       .setMIFlag(MachineInstr::FrameSetup);
