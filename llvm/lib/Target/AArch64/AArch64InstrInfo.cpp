@@ -10956,7 +10956,8 @@ AArch64InstrInfo::getOutliningCandidateInfo(
   else if (LastInstrOpcode == AArch64::BL ||
            ((LastInstrOpcode == AArch64::BLR ||
              LastInstrOpcode == AArch64::BLRNoIP) &&
-            !HasBTI)) {
+            !HasBTI) ||
+           LastInstrOpcode == AArch64::BLRA) {
     // FIXME: Do we need to check if the code after this uses the value of LR?
     FrameID = MachineOutlinerThunk;
     NumBytesToCreateFrame = NumBytesToCheckLRInTCEpilogue;
@@ -11344,6 +11345,20 @@ AArch64InstrInfo::getOutlinableRanges(MachineBasicBlock &MBB,
   return Ranges;
 }
 
+/// Returns true if the authenticated call \p MI can be rewritten as an
+/// authenticated tail call (AUTH_TCRETURN) at the end of an outlined thunk.
+static bool canTailCallAuthenticatedCall(const MachineInstr &MI) {
+  assert(MI.getOpcode() == AArch64::BLRA && "Expected an authenticated call");
+  // AUTH_TCRETURN_BTI needs the target in x16/x17, which BLRA never uses, and
+  // authenticated tail calls are not supported with PAuthLR.
+  const auto *FI = MI.getMF()->getInfo<AArch64FunctionInfo>();
+  if (FI->branchTargetEnforcement() || FI->branchProtectionPAuthLR())
+    return false;
+  Register AddrDisc = MI.getOperand(3).getReg();
+  return AArch64::tcGPRnotx16x17RegClass.contains(MI.getOperand(0).getReg()) &&
+         (!AddrDisc.isValid() || AArch64::tcGPR64RegClass.contains(AddrDisc));
+}
+
 outliner::InstrType
 AArch64InstrInfo::getOutliningTypeImpl(const MachineModuleInfo &MMI,
                                        MachineBasicBlock::iterator &MIT,
@@ -11446,8 +11461,9 @@ AArch64InstrInfo::getOutliningTypeImpl(const MachineModuleInfo &MMI,
     // as a tail-call. Explicitly list the call instructions we know about so we
     // don't get unexpected results with call pseudo-instructions.
     auto UnknownCallOutlineType = outliner::InstrType::Illegal;
-    if (MI.getOpcode() == AArch64::BLR ||
-        MI.getOpcode() == AArch64::BLRNoIP || MI.getOpcode() == AArch64::BL)
+    if (MI.getOpcode() == AArch64::BLR || MI.getOpcode() == AArch64::BLRNoIP ||
+        MI.getOpcode() == AArch64::BL ||
+        (MI.getOpcode() == AArch64::BLRA && canTailCallAuthenticatedCall(MI)))
       UnknownCallOutlineType = outliner::InstrType::LegalTerminator;
 
     if (!Callee)
@@ -11557,14 +11573,21 @@ void AArch64InstrInfo::buildOutlinedFrame(
     unsigned TailOpcode;
     if (Call->getOpcode() == AArch64::BL) {
       TailOpcode = AArch64::TCRETURNdi;
+    } else if (Call->getOpcode() == AArch64::BLRA) {
+      TailOpcode = AArch64::AUTH_TCRETURN;
     } else {
       assert(Call->getOpcode() == AArch64::BLR ||
              Call->getOpcode() == AArch64::BLRNoIP);
       TailOpcode = AArch64::TCRETURNriALL;
     }
-    MachineInstr *TC = BuildMI(MF, DebugLoc(), get(TailOpcode))
-                           .add(Call->getOperand(0))
-                           .addImm(0);
+    MachineInstrBuilder TC = BuildMI(MF, DebugLoc(), get(TailOpcode))
+                                 .add(Call->getOperand(0))
+                                 .addImm(0);
+    // Keep the key and the integer and address discriminators.
+    if (TailOpcode == AArch64::AUTH_TCRETURN)
+      TC.add(Call->getOperand(1))
+          .add(Call->getOperand(2))
+          .add(Call->getOperand(3));
     MBB.insert(MBB.end(), TC);
     Call->eraseFromParent();
 

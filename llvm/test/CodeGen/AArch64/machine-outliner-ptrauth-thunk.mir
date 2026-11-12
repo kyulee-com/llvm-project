@@ -1,0 +1,186 @@
+# RUN: llc -mtriple=arm64e-apple-darwin -run-pass=machine-outliner \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s
+
+# Sequences that end in an authenticated indirect call (BLRA) are outlined as
+# thunks that end in AUTH_TCRETURN, keeping the key and both discriminators.
+# BLRA stays an outlining barrier when AUTH_TCRETURN cannot be used: the call
+# target or the address discriminator is a callee-saved register, or BTI or
+# PAuthLR is enabled.
+
+--- |
+  define void @ia_zero() #0 { ret void }
+  define void @ib_blend() #0 { ret void }
+  define void @csr_target() #0 { ret void }
+  define void @csr_addr_disc() #0 { ret void }
+  define void @bti() #1 { ret void }
+  define void @pauth_lr() #2 { ret void }
+
+  attributes #0 = { minsize "ptrauth-calls" }
+  attributes #1 = { minsize "ptrauth-calls" "branch-target-enforcement" }
+  attributes #2 = { minsize "ptrauth-calls" "branch-protection-pauth-lr" "target-features"="+pauth-lr" }
+...
+# CHECK-LABEL: name: ia_zero
+# CHECK:       BL @OUTLINED_FUNCTION_1
+# CHECK-NEXT:  $w21 = ADDWrr $w0, $w0
+# CHECK-NEXT:  BL @OUTLINED_FUNCTION_1
+---
+name:            ia_zero
+tracksRegLiveness: true
+machineFunctionInfo:
+  hasRedZone: false
+body:             |
+  bb.0:
+    liveins: $x19, $x20, $lr
+
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    BLRA $x8, 0, 0, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit-def $sp, implicit-def $w0
+    $w21 = ADDWrr $w0, $w0
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 1, 0
+    $w1 = MOVZWi 2, 0
+    $w2 = MOVZWi 3, 0
+    BLRA $x8, 0, 0, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit-def $sp, implicit-def $w0
+    RET undef $lr, implicit $w0, implicit $w21
+# CHECK-LABEL: name: ib_blend
+# CHECK:       BL @OUTLINED_FUNCTION_0
+# CHECK-NEXT:  $w21 = ADDWrr $w0, $w0
+# CHECK-NEXT:  BL @OUTLINED_FUNCTION_0
+---
+name:            ib_blend
+tracksRegLiveness: true
+machineFunctionInfo:
+  hasRedZone: false
+body:             |
+  bb.0:
+    liveins: $x19, $x20, $lr
+
+    $x8 = ORRXrs $xzr, $x19, 0
+    $x9 = ADDXri $x20, 16, 0
+    $w0 = MOVZWi 11, 0
+    $w1 = MOVZWi 12, 0
+    $w2 = MOVZWi 13, 0
+    BLRA $x8, 1, 1234, $x9, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit-def $sp, implicit-def $w0
+    $w21 = ADDWrr $w0, $w0
+    $x8 = ORRXrs $xzr, $x19, 0
+    $x9 = ADDXri $x20, 16, 0
+    $w0 = MOVZWi 11, 0
+    $w1 = MOVZWi 12, 0
+    $w2 = MOVZWi 13, 0
+    BLRA $x8, 1, 1234, $x9, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit-def $sp, implicit-def $w0
+    RET undef $lr, implicit $w0, implicit $w21
+# CHECK-LABEL: name: csr_target
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x19, 0, 0, $noreg
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x19, 0, 0, $noreg
+---
+name:            csr_target
+tracksRegLiveness: true
+machineFunctionInfo:
+  hasRedZone: false
+body:             |
+  bb.0:
+    liveins: $x19, $x20, $lr
+
+    $w0 = MOVZWi 21, 0
+    $w1 = MOVZWi 22, 0
+    $w2 = MOVZWi 23, 0
+    BLRA $x19, 0, 0, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit-def $sp, implicit-def $w0
+    $w21 = ADDWrr $w0, $w0
+    $w0 = MOVZWi 21, 0
+    $w1 = MOVZWi 22, 0
+    $w2 = MOVZWi 23, 0
+    BLRA $x19, 0, 0, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit $w2, implicit-def $sp, implicit-def $w0
+    RET undef $lr, implicit $w0, implicit $w21
+# CHECK-LABEL: name: csr_addr_disc
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x8, 0, 42, $x20
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x8, 0, 42, $x20
+---
+name:            csr_addr_disc
+tracksRegLiveness: true
+machineFunctionInfo:
+  hasRedZone: false
+body:             |
+  bb.0:
+    liveins: $x19, $x20, $lr
+
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 31, 0
+    $w1 = MOVZWi 32, 0
+    BLRA $x8, 0, 42, $x20, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit-def $sp, implicit-def $w0
+    $w21 = ADDWrr $w0, $w0
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 31, 0
+    $w1 = MOVZWi 32, 0
+    BLRA $x8, 0, 42, $x20, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit-def $sp, implicit-def $w0
+    RET undef $lr, implicit $w0, implicit $w21
+# CHECK-LABEL: name: bti
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x8, 0, 42, $noreg
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x8, 0, 42, $noreg
+---
+name:            bti
+tracksRegLiveness: true
+machineFunctionInfo:
+  hasRedZone: false
+body:             |
+  bb.0:
+    liveins: $x19, $x20, $lr
+
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 41, 0
+    $w1 = MOVZWi 42, 0
+    BLRA $x8, 0, 42, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit-def $sp, implicit-def $w0
+    $w21 = ADDWrr $w0, $w0
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 41, 0
+    $w1 = MOVZWi 42, 0
+    BLRA $x8, 0, 42, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit-def $sp, implicit-def $w0
+    RET undef $lr, implicit $w0, implicit $w21
+# CHECK-LABEL: name: pauth_lr
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x8, 0, 42, $noreg
+# CHECK-NOT:   BL @OUTLINED
+# CHECK:       BLRA $x8, 0, 42, $noreg
+---
+name:            pauth_lr
+tracksRegLiveness: true
+machineFunctionInfo:
+  hasRedZone: false
+body:             |
+  bb.0:
+    liveins: $x19, $x20, $lr
+
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 51, 0
+    $w1 = MOVZWi 52, 0
+    BLRA $x8, 0, 42, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit-def $sp, implicit-def $w0
+    $w21 = ADDWrr $w0, $w0
+    $x8 = ORRXrs $xzr, $x19, 0
+    $w0 = MOVZWi 51, 0
+    $w1 = MOVZWi 52, 0
+    BLRA $x8, 0, 42, $noreg, csr_darwin_aarch64_aapcs, implicit-def dead $x16, implicit-def dead $x17, implicit-def dead $lr, implicit $sp, implicit $w0, implicit $w1, implicit-def $sp, implicit-def $w0
+    RET undef $lr, implicit $w0, implicit $w21
+
+# CHECK-LABEL: name: OUTLINED_FUNCTION_0
+# CHECK:       $x8 = ORRXrs $xzr, $x19, 0
+# CHECK-NEXT:  $x9 = ADDXri $x20, 16, 0
+# CHECK-NEXT:  $w0 = MOVZWi 11, 0
+# CHECK-NEXT:  $w1 = MOVZWi 12, 0
+# CHECK-NEXT:  $w2 = MOVZWi 13, 0
+# CHECK-NEXT:  AUTH_TCRETURN $x8, 0, 1, 1234, $x9, implicit-def $x16, implicit-def $x17, implicit $sp
+
+# CHECK-LABEL: name: OUTLINED_FUNCTION_1
+# CHECK:       $x8 = ORRXrs $xzr, $x19, 0
+# CHECK-NEXT:  $w0 = MOVZWi 1, 0
+# CHECK-NEXT:  $w1 = MOVZWi 2, 0
+# CHECK-NEXT:  $w2 = MOVZWi 3, 0
+# CHECK-NEXT:  AUTH_TCRETURN $x8, 0, 0, 0, $noreg, implicit-def $x16, implicit-def $x17, implicit $sp
+
+# CHECK-NOT:   name: OUTLINED_FUNCTION_2
